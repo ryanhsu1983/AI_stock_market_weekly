@@ -1,0 +1,41 @@
+name: 每週台股趨勢分析
+
+on:
+  schedule:
+    # 台灣時間每週五 15:00 = UTC 07:00；程式會用隔日作為 yfinance end，抓到週五收盤資料
+    - cron: '0 7 * * 5'
+    # 台灣時間每週五 15:30 備援；程式會用同一週檔名檢查，避免重複寄送
+    - cron: '30 7 * * 5'
+  workflow_dispatch:          # 允許手動在網頁上觸發
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  run-weekly-signal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: 取得程式碼
+        uses: actions/checkout@v4
+
+      - name: 安裝 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 安裝套件
+        run: |
+          pip install yfinance pandas requests playwright google-api-python-client google-auth
+          playwright install --with-deps chromium
+
+      - name: 執行每週趨勢分析
+        env:
+          GMAIL_PASSWORD: ${{ secrets.GMAIL_PASSWORD }}
+          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
+          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ vars.GOOGLE_DRIVE_FOLDER_ID }}
+        run: python stock_market_tracking_system.py

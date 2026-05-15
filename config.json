@@ -1,0 +1,203 @@
+{
+  "watchlist": [
+    {
+      "ticker": "^TWII",
+      "name": "台灣加權指數",
+      "note": "台股大盤環境，重點看趨勢、動能、匯率與利率；三大法人個股買賣超不適用於指數本身",
+      "overrides": {
+        "kd_buy": 35, "kd_sell": 75,
+        "bias60_p_low": 5, "bias60_p_high": 95,
+        "use_obv": false, "use_vol_trend": false,
+        "use_institutional": false,
+        "use_fx": true, "use_rates": true,
+        "macro_sensitivity": "market",
+        "leverage_warning": false,
+        "ma_periods": {"short": 10, "mid": 20, "long": 60}
+      }
+    },
+    {
+      "ticker": "2330.TW",
+      "name": "台積電",
+      "note": "台股核心權值股，受外資、美元匯率、AI/HPC需求與ADR影響大；趨勢與外資籌碼權重較高",
+      "overrides": {
+        "kd_buy": 35, "kd_sell": 75,
+        "bias60_p_low": 5, "bias60_p_high": 95,
+        "use_obv": true, "use_vol_trend": true,
+        "use_institutional": true,
+        "use_fx": true, "use_rates": true,
+        "macro_sensitivity": "exporter",
+        "leverage_warning": false,
+        "ma_periods": {"short": 10, "mid": 20, "long": 60}
+      }
+    },
+    {
+      "ticker": "2454.TW",
+      "name": "聯發科",
+      "note": "IC設計與景氣循環股，波動較大，受手機、AI終端、美元匯率與半導體評價循環影響",
+      "overrides": {
+        "kd_buy": 30, "kd_sell": 70,
+        "bias60_p_low": 5, "bias60_p_high": 95,
+        "use_obv": true, "use_vol_trend": true,
+        "use_institutional": true,
+        "use_fx": true, "use_rates": true,
+        "macro_sensitivity": "exporter",
+        "leverage_warning": false,
+        "ma_periods": {"short": 10, "mid": 20, "long": 60}
+      }
+    },
+    {
+      "ticker": "2308.TW",
+      "name": "台達電",
+      "note": "電源管理、AI伺服器電源與散熱相關權值股，受AI基礎建設、匯率與外資籌碼影響",
+      "overrides": {
+        "kd_buy": 35, "kd_sell": 75,
+        "bias60_p_low": 5, "bias60_p_high": 95,
+        "use_obv": true, "use_vol_trend": true,
+        "use_institutional": true,
+        "use_fx": true, "use_rates": true,
+        "macro_sensitivity": "exporter",
+        "leverage_warning": false,
+        "ma_periods": {"short": 10, "mid": 20, "long": 60}
+      }
+    },
+    {
+      "ticker": "2317.TW",
+      "name": "鴻海",
+      "note": "電子代工與AI伺服器供應鏈核心股，受外資、美元匯率、AI伺服器需求與消費電子循環影響",
+      "overrides": {
+        "kd_buy": 35, "kd_sell": 75,
+        "bias60_p_low": 5, "bias60_p_high": 95,
+        "use_obv": true, "use_vol_trend": true,
+        "use_institutional": true,
+        "use_fx": true, "use_rates": true,
+        "macro_sensitivity": "exporter",
+        "leverage_warning": false,
+        "ma_periods": {"short": 10, "mid": 20, "long": 60}
+      }
+    },
+    {
+      "ticker": "2382.TW",
+      "name": "廣達",
+      "note": "筆電與AI伺服器代工指標股，受AI伺服器出貨、雲端客戶資本支出與匯率影響",
+      "overrides": {
+        "kd_buy": 35, "kd_sell": 75,
+        "bias60_p_low": 5, "bias60_p_high": 95,
+        "use_obv": true, "use_vol_trend": true,
+        "use_institutional": true,
+        "use_fx": true, "use_rates": true,
+        "macro_sensitivity": "exporter",
+        "leverage_warning": false,
+        "ma_periods": {"short": 10, "mid": 20, "long": 60}
+      }
+    },
+    {
+      "ticker": "3231.TW",
+      "name": "緯創",
+      "note": "AI伺服器與資通訊代工股，波動較大，受AI訂單、外資籌碼與美元匯率影響",
+      "overrides": {
+        "kd_buy": 30, "kd_sell": 70,
+        "bias60_p_low": 5, "bias60_p_high": 95,
+        "use_obv": true, "use_vol_trend": true,
+        "use_institutional": true,
+        "use_fx": true, "use_rates": true,
+        "macro_sensitivity": "exporter",
+        "leverage_warning": false,
+        "ma_periods": {"short": 10, "mid": 20, "long": 60}
+      }
+    },
+    {
+      "ticker": "6669.TW",
+      "name": "緯穎",
+      "note": "AI伺服器與雲端資料中心供應鏈高價股，受雲端客戶資本支出、AI需求與籌碼波動影響",
+      "overrides": {
+        "kd_buy": 30, "kd_sell": 70,
+        "bias60_p_low": 5, "bias60_p_high": 95,
+        "use_obv": true, "use_vol_trend": true,
+        "use_institutional": true,
+        "use_fx": true, "use_rates": true,
+        "macro_sensitivity": "exporter",
+        "leverage_warning": false,
+        "ma_periods": {"short": 10, "mid": 20, "long": 60}
+      }
+    }
+  ],
+
+  "lookback_days": 600,
+
+  "thresholds": {
+    "kd_buy": 30, "kd_sell": 70,
+    "bias60_p_low": 5, "bias60_p_high": 95,
+    "vol_ma_period": 10, "obv_ma_period": 10
+  },
+
+  "ma_periods": {"short": 10, "mid": 20, "long": 60},
+
+  "market_events_window_days": 14,
+  "auto_news": {
+    "enabled": true,
+    "lookback_days": 7,
+    "max_items": 10,
+    "max_items_per_query": 3,
+    "queries": [
+      "台股 重大事件 外資 匯率",
+      "台灣股市 本週 重大新聞",
+      "台股 半導體 外資 匯率",
+      "川習會 台股 市場波動",
+      "美中峰會 台股 cnyes",
+      "美中 關稅 晶片管制 台股",
+      "Fed 利率 科技股 台股",
+      "原油 油價 中東 股市",
+      "美伊 戰爭 台股 原油",
+      "台積電 營收 法說 AI 半導體",
+      "NVIDIA AI 半導體 台股",
+      "AI伺服器 台股 廣達 緯創 緯穎"
+    ]
+  },
+
+  "market_events": [
+    {
+      "date": "2026-05-14",
+      "title": "川習會（北京，預計 5/14-5/15）",
+      "impact": "高",
+      "scope": "台股、半導體、匯率、外資風險偏好",
+      "note": "市場通常會在美中高層會談前降低追價意願；若談判偏和緩，科技股與台股風險偏好可望改善；若涉及台灣、晶片管制或關稅升級，半導體權值股容易先修正。",
+      "source": "AP / ABC / Bloomberg 報導"
+    },
+    {
+      "date": "2026-06-10",
+      "title": "台積電 2026 年 5 月營收公告",
+      "impact": "中高",
+      "scope": "台積電、半導體供應鏈、加權指數",
+      "note": "台積電月營收會影響市場對 AI/HPC、先進製程需求與 Q2 財測達成率的判斷；若營收連續優於季節性，對台股權值股偏正面，反之容易壓抑評價。",
+      "source": "TSMC Financial Calendar"
+    },
+    {
+      "date": "2026-06-16",
+      "title": "Fed FOMC 利率決議（6/16-6/17）",
+      "impact": "高",
+      "scope": "全球股市、美元、台幣、外資資金流",
+      "note": "若降息預期升溫或長債殖利率下行，通常有利科技股評價；若 Fed 偏鷹或利率維持高檔，成長股估值與外資資金流容易承壓。",
+      "source": "Federal Reserve FOMC Calendar"
+    }
+  ],
+
+  "pyramid": {
+    "add_per_drop_pct": 5.0,
+    "add_ratio_pct": 20.0,
+    "time_rebalance_days": 20,
+    "time_add_ratio_pct": 5.0
+  },
+
+  "email": {
+    "to": "zergva@gmail.com",
+    "from": "zergva@gmail.com",
+    "subject": "【每週台股趨勢報告】{date} 第{week}週"
+  },
+
+  "drive_report": {
+    "enabled": true,
+    "folder_id": "1E6w7XNwm3nn7XhjwQwdM62zVQCJgGK6M",
+    "folder_path": ["每週發布", "{year}", "台股加權及中大型權值股訊號追蹤"],
+    "image_width": 1080
+  }
+}

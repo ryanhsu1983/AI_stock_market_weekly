@@ -1,0 +1,5 @@
+__pycache__/
+.yfinance_cache/
+email_preview.html
+social_report_*.html
+*.png

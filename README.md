@@ -1,0 +1,2 @@
+# AI_stock_market_weekly
+加權指數及中大型權值股每週訊號追蹤

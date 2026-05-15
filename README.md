@@ -62,9 +62,9 @@ https://drive.google.com/drive/u/0/folders/1E6w7XNwm3nn7XhjwQwdM62zVQCJgGK6M
 
 圖片檔名格式：
 
-`YYYYMMDD_weekN__01.png`
+`YYYYMMDD_weekN_01.png`
 
-`YYYYMMDD_weekN__02.png`
+`YYYYMMDD_weekN_02.png`
 
 同一週防重複寄送會以第 1 張週報圖片檔名作為完成判斷；若 Google Drive 已存在同週檔案，備援排程或手動重跑會跳過寄送。
 

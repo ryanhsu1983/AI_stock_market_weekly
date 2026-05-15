@@ -802,6 +802,14 @@ def format_market_value(value: float, unit: str = "張") -> str:
     return f'平盤 0{unit}'
 
 
+def format_market_value_text(value: float, unit: str = "張") -> str:
+    if value > 0:
+        return f"買超 {value:.0f}{unit}"
+    if value < 0:
+        return f"賣超 {abs(value):.0f}{unit}"
+    return f"平盤 0{unit}"
+
+
 def format_ratio_value(value: float) -> str:
     if value > 0:
         return f'<span style="color:{UP_COLOR};font-weight:bold;">+{value:.2f}%</span>'
@@ -1996,7 +2004,7 @@ def build_social_report_pages(results: list, today: str, cfg: dict | None = None
       .market-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}.metric{background:#f3f6f9;border-radius:16px;padding:16px}.metric-label{font-size:18px;color:#6b7785}.metric-value{font-size:28px;font-weight:800;margin-top:6px}
       .pulse{margin-top:16px;border-left:8px solid var(--c);background:#fbfcfd;border-radius:14px;padding:14px 18px}.pulse-main{font-size:24px;font-weight:800;color:var(--c)}.pulse-sub{font-size:19px;line-height:1.45;color:#536171;margin-top:6px}
       .event-grid,.news-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.event,.news{border-left:8px solid var(--c);background:#fbfcfd;border-radius:14px;padding:14px 16px;min-height:118px}.event-title,.news-title{font-size:20px;font-weight:800;line-height:1.35}.event-meta,.news-meta{font-size:16px;color:#7b8794;margin-top:7px}.event-note,.news-note{font-size:17px;line-height:1.4;color:#536171;margin-top:7px}
-      .cards{height:1648px;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:repeat(4,1fr);gap:18px}.card{background:#fff;border:1px solid #dfe6ee;border-left:10px solid var(--c);border-radius:20px;padding:16px 18px;overflow:hidden;display:flex;flex-direction:column}.card-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.card-name{font-size:25px;font-weight:800}.code{font-size:16px;color:#7b8794;margin-top:2px}.price{font-size:24px;font-weight:800}.badge{display:block;background:var(--c);color:#fff;border-radius:999px;padding:7px 12px;font-size:16px;font-weight:800;margin:9px 0 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.op{font-size:21px;font-weight:800;line-height:1.25}.reason{font-size:17px;line-height:1.34;color:#4a5562;margin-top:4px;max-height:68px;overflow:hidden}.indicator-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:auto;padding-top:10px}.ind{background:#f5f7f9;border-radius:12px;padding:8px 10px;min-height:70px;overflow:hidden}.ind-title{font-size:14px;color:#7b8794}.ind-value{font-size:16px;font-weight:800;line-height:1.22;margin-top:2px}.ind-note{font-size:13px;color:#8a96a3;line-height:1.2;margin-top:2px}.footer{font-size:16px;color:#7b8794;text-align:center;margin-top:10px}
+      .cards{height:1648px;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:repeat(4,1fr);gap:18px}.card{background:#fff;border:1px solid #dfe6ee;border-left:10px solid var(--c);border-radius:20px;padding:16px 18px;overflow:hidden;display:flex;flex-direction:column}.card-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.card-name{font-size:25px;font-weight:800}.code{font-size:16px;color:#7b8794;margin-top:2px}.price{font-size:24px;font-weight:800}.badge{display:flex;align-items:center;background:var(--c);color:#fff;border-radius:999px;padding:0 14px;font-size:16px;font-weight:800;line-height:1.18;min-height:42px;margin:9px 0 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.badge span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.op{font-size:21px;font-weight:800;line-height:1.25}.reason{font-size:17px;line-height:1.34;color:#4a5562;margin-top:4px;max-height:68px;overflow:hidden}.indicator-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:auto;padding-top:10px}.ind{background:#f5f7f9;border-radius:12px;padding:8px 10px;min-height:70px;overflow:hidden}.ind-title{font-size:14px;color:#7b8794}.ind-value{font-size:16px;font-weight:800;line-height:1.22;margin-top:2px;overflow:hidden;text-overflow:ellipsis}.ind-note{font-size:13px;color:#8a96a3;line-height:1.2;margin-top:2px}.footer{font-size:16px;color:#7b8794;text-align:center;margin-top:10px}
     </style>
     """
     market = results[0][2] if results else {}
@@ -2057,16 +2065,19 @@ def build_social_report_pages(results: list, today: str, cfg: dict | None = None
         code = ticker.replace(".TW", "").replace(".tw", "")
         weekly = r.get("weekly", {})
         regime = r.get("regime", {})
+        inst_total = weekly.get("institutional_total")
+        inst_text = format_market_value_text(inst_total / 1000) if inst_total is not None else "-"
+        inst_color = UP_COLOR if (inst_total or 0) >= 0 else DOWN_COLOR
         cards += (
             f"<div class='card' style='--c:{weekly.get('posture_color', r.get('border', NEUTRAL_COLOR))}'>"
             f"<div class='card-head'><div><div class='card-name'>{html_lib.escape(name)}</div><div class='code'>{code}</div></div><div class='price'>{r.get('close',0):.2f}</div></div>"
-            f"<div class='badge'>{html_lib.escape(weekly.get('trend_summary','觀察'))}</div>"
+            f"<div class='badge'><span>{html_lib.escape(weekly.get('trend_summary','觀察'))}</span></div>"
             f"<div class='op'>{html_lib.escape(weekly.get('posture','觀察'))}</div>"
             f"<div class='reason'>{html_lib.escape(_social_short_text(weekly.get('next_focus',''), 76))}</div>"
             f"<div class='indicator-grid'>"
             f"<div class='ind'><div class='ind-title'>本週漲跌</div><div class='ind-value'>{pct_text(weekly.get('week_chg_pct'))}</div><div class='ind-note'>高{weekly.get('week_high',0):.2f} / 低{weekly.get('week_low',0):.2f}</div></div>"
             f"<div class='ind'><div class='ind-title'>均線位置</div><div class='ind-value' style='color:{weekly.get('posture_color', NEUTRAL_COLOR)}'>{html_lib.escape(_social_short_text(weekly.get('ma_position','-'), 18))}</div><div class='ind-note'>{html_lib.escape(regime.get('label','-'))}</div></div>"
-            f"<div class='ind'><div class='ind-title'>法人週合計</div><div class='ind-value'>{html_lib.escape(format_market_value((weekly.get('institutional_total') or 0) / 1000) if weekly.get('institutional_total') is not None else '-')}</div><div class='ind-note'>三大法人買賣超</div></div>"
+            f"<div class='ind'><div class='ind-title'>法人週合計</div><div class='ind-value' style='color:{inst_color}'>{html_lib.escape(inst_text)}</div><div class='ind-note'>三大法人買賣超</div></div>"
             f"<div class='ind'><div class='ind-title'>量能</div><div class='ind-value'>{weekly.get('volume_ratio', 0):.2f}x</div><div class='ind-note'>週日均量 / 20日均量</div></div>"
             f"</div></div>"
         )
@@ -2350,7 +2361,7 @@ def main():
     report_meta = get_report_meta(now_tw)
     today = report_meta["date"]
     print(f"[{now_tw.strftime('%Y-%m-%d %H:%M')}] 開始每週趨勢分析，共 {len(cfg['watchlist'])} 檔")
-    if drive_file_exists(f"{report_meta['date_key']}_week{report_meta['week']}__01.png", cfg):
+    if drive_file_exists(f"{report_meta['date_key']}_week{report_meta['week']}_01.png", cfg):
         return
 
     macro = fetch_market_context()
@@ -2401,7 +2412,7 @@ def main():
         print("所有分析失敗，中止")
         return
 
-    if drive_file_exists(f"{report_meta['date_key']}_week{report_meta['week']}__01.png", cfg):
+    if drive_file_exists(f"{report_meta['date_key']}_week{report_meta['week']}_01.png", cfg):
         return
 
     html = build_email_html(results, today, cfg, macro, news_items)
@@ -2419,7 +2430,7 @@ def main():
         build_social_report_pages(results, today, cfg, macro, news_items), today
     )
     for idx, social_page in enumerate(social_pages, start=1):
-        image_name = f"{report_meta['date_key']}_week{report_meta['week']}__{idx:02d}.png"
+        image_name = f"{report_meta['date_key']}_week{report_meta['week']}_{idx:02d}.png"
         image_path = render_report_image(
             social_page, today, cfg, output_name=image_name, full_page=False, height=1920
         )

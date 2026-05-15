@@ -737,7 +737,7 @@ def trade_plan_html(result: dict, compact: bool = False) -> str:
         f'<span style="background:{result.get("border", NEUTRAL_COLOR)};color:#fff;'
         f'font-size:12px;font-weight:bold;padding:4px 8px;border-radius:5px;'
         f'white-space:nowrap;display:inline-block;margin-right:6px;">'
-        f'💡 {result.get("summary", "無訊號")}</span>'
+        f'{result.get("summary", "無訊號")}</span>'
     )
     status_tags = (
         f'<span style="background:{regime.get("color", NEUTRAL_COLOR)};color:#fff;'
@@ -967,7 +967,7 @@ def evaluate(df: pd.DataFrame, scfg: dict, inst: dict | None = None) -> dict:
         if obv_rising and price_up:
             obv_label, obv_color = "量價齊揚 ✅",    "#2ecc71"; l2_buy  += 1
         elif obv_rising and not price_up:
-            obv_label, obv_color = "OBV領先價格 💡", "#3498db"
+            obv_label, obv_color = "OBV領先價格", "#3498db"
         elif obv_falling and not price_up:
             obv_label, obv_color = "量價齊跌 ⚠️",   "#e74c3c"; l2_sell += 1
         elif obv_falling and price_up:
@@ -1304,7 +1304,7 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
         if obv_rising and price_up:
             add_item("OBV", "量價齊揚 ✅", UP_COLOR, obv_note, WEIGHTS["obv"], 0)
         elif obv_rising and not price_up:
-            add_item("OBV", "OBV領先價格 💡", "#3498db", obv_note, WEIGHTS["obv"] * 0.5, 0)
+            add_item("OBV", "OBV領先價格", "#3498db", obv_note, WEIGHTS["obv"] * 0.5, 0)
         elif obv_falling and not price_up:
             add_item("OBV", "量價齊跌 ⚠️", DOWN_COLOR, obv_note, 0, WEIGHTS["obv"])
         elif obv_falling and price_up:
@@ -1436,7 +1436,7 @@ def stock_html_block(name: str, ticker: str, result: dict, note: str = "") -> st
     if note:
         note_html = (f'<div style="background:#fef9e7;padding:8px 16px;'
                      f'font-size:12px;color:#7d6608;border-bottom:1px solid #eee;">'
-                     f'💡 {note}</div>')
+                     f'{note}</div>')
 
     trade_html = (
         f'<div style="background:#fff;padding:12px 16px;border-bottom:1px solid #eee;">'
@@ -1480,11 +1480,19 @@ def summary_table(results: list) -> str:
         weekly = r.get("weekly", {})
         posture = weekly.get("posture", "觀察")
         posture_color = weekly.get("posture_color", r["border"])
-        week_chg = pct_text(weekly.get("week_chg_pct"))
-        next_focus = html_lib.escape(_social_short_text(weekly.get("next_focus", ""), 86))
+        week_chg_pct = weekly.get("week_chg_pct")
+        week_chg = pct_text(week_chg_pct)
+        chg_color = UP_COLOR if (week_chg_pct or 0) >= 0 else DOWN_COLOR
+        next_focus = html_lib.escape(_social_short_text(weekly.get("next_focus", ""), 110))
+        ma_position = html_lib.escape(_social_short_text(weekly.get("ma_position", "-"), 48))
+        inst_total = weekly.get("institutional_total")
+        inst_text = format_market_value(inst_total / 1000) if inst_total is not None else "-"
+        vol_ratio = weekly.get("volume_ratio")
+        vol_text = f"{vol_ratio:.2f}x" if vol_ratio is not None else "-"
+        high_low = f"{weekly.get('week_high', 0):.2f} / {weekly.get('week_low', 0):.2f}"
         cards += (
             f'<div style="border:1px solid #ddd;border-left:5px solid {posture_color};'
-            f'border-radius:8px;padding:12px 14px;margin-bottom:12px;background:#fff;">'
+            f'border-radius:8px;padding:14px 16px;margin-bottom:14px;background:#fff;">'
             f'<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">'
             f'<div style="min-width:0;">'
             f'<div style="font-size:16px;font-weight:bold;color:#2c3e50;line-height:1.4;">{name}</div>'
@@ -1493,10 +1501,24 @@ def summary_table(results: list) -> str:
             f'<div style="text-align:right;white-space:nowrap;">'
             f'<div style="font-size:11px;color:#888;">收盤 / 本週</div>'
             f'<div style="font-size:18px;font-weight:bold;color:#2c3e50;">{r["close"]:.2f}</div>'
-            f'<div style="font-size:12px;font-weight:bold;color:{UP_COLOR if (weekly.get("week_chg_pct") or 0) >= 0 else DOWN_COLOR};">{week_chg}</div>'
+            f'<div style="font-size:12px;font-weight:bold;color:{chg_color};">{week_chg}</div>'
             f'</div></div>'
             f'<div style="margin-top:8px;color:{posture_color};font-size:15px;font-weight:bold;">{posture}</div>'
-            f'<div style="margin-top:4px;color:#666;font-size:12px;line-height:1.55;">{next_focus}</div>'
+            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:9px;">'
+            f'<div style="background:#f7f9fb;border-radius:6px;padding:7px 8px;">'
+            f'<div style="font-size:11px;color:#888;">本週高 / 低</div>'
+            f'<div style="font-size:12px;font-weight:bold;color:#2c3e50;">{high_low}</div></div>'
+            f'<div style="background:#f7f9fb;border-radius:6px;padding:7px 8px;">'
+            f'<div style="font-size:11px;color:#888;">法人週合計</div>'
+            f'<div style="font-size:12px;font-weight:bold;color:#2c3e50;">{inst_text}</div></div>'
+            f'<div style="background:#f7f9fb;border-radius:6px;padding:7px 8px;">'
+            f'<div style="font-size:11px;color:#888;">量能比</div>'
+            f'<div style="font-size:12px;font-weight:bold;color:#2c3e50;">{vol_text}</div></div>'
+            f'<div style="background:#f7f9fb;border-radius:6px;padding:7px 8px;">'
+            f'<div style="font-size:11px;color:#888;">均線位置</div>'
+            f'<div style="font-size:12px;font-weight:bold;color:#2c3e50;">{ma_position}</div></div>'
+            f'</div>'
+            f'<div style="margin-top:8px;color:#666;font-size:12px;line-height:1.55;">下週觀察：{next_focus}</div>'
             f'</div>'
         )
     return f'<div style="margin-bottom:28px;">{cards}</div>'
@@ -1999,7 +2021,7 @@ def build_social_report_pages(results: list, today: str, cfg: dict | None = None
           <div class='metric'><div class='metric-label'>美10年債殖利率</div><div class='metric-value'>{rates_value}</div></div>
           <div class='metric'><div class='metric-label'>年度週數</div><div class='metric-value'>Week {meta['week']}</div></div>
         </div>
-        <div class='pulse' style='--c:{market_color}'><div class='pulse-main'>💡 {market_summary}｜{market_headline}</div><div class='pulse-sub'>{market_reason}</div></div>
+        <div class='pulse' style='--c:{market_color}'><div class='pulse-main'>{market_summary}｜{market_headline}</div><div class='pulse-sub'>{market_reason}</div></div>
       </div>"""
 
     impact_colors = {"高": UP_COLOR, "中高": WARN_COLOR, "中": "#f39c12", "低": NEUTRAL_COLOR}
@@ -2038,7 +2060,7 @@ def build_social_report_pages(results: list, today: str, cfg: dict | None = None
         cards += (
             f"<div class='card' style='--c:{weekly.get('posture_color', r.get('border', NEUTRAL_COLOR))}'>"
             f"<div class='card-head'><div><div class='card-name'>{html_lib.escape(name)}</div><div class='code'>{code}</div></div><div class='price'>{r.get('close',0):.2f}</div></div>"
-            f"<div class='badge'>💡 {html_lib.escape(weekly.get('trend_summary','觀察'))}</div>"
+            f"<div class='badge'>{html_lib.escape(weekly.get('trend_summary','觀察'))}</div>"
             f"<div class='op'>{html_lib.escape(weekly.get('posture','觀察'))}</div>"
             f"<div class='reason'>{html_lib.escape(_social_short_text(weekly.get('next_focus',''), 76))}</div>"
             f"<div class='indicator-grid'>"

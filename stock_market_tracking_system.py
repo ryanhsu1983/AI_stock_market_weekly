@@ -2768,77 +2768,99 @@ def build_social_report_pages(results: list, today: str, cfg: dict | None = None
     fx_value = f"{fx['value']:.3f}" if fx else "-"
     rates_value = f"{rates['value']:.2f}%" if rates else "-"
     inst_value_text = market_weekly.get("institutional_value_text") or format_twd_billion_short(market_weekly.get("institutional_value"))
-    chart = render_price_chart(market, 930, 420, compact=True)
+    inst_series = market_weekly.get("institutional_daily_values", [])
+    fx_series = fx.get("series", []) if fx else []
+    rates_series = rates.get("series", []) if rates else []
+    inst_note = macro_metric_note("institutional", market_weekly.get("institutional_value"), inst_series)
+    fx_note = macro_metric_note("fx", fx.get("value") if fx else None, fx_series)
+    rates_note = macro_metric_note("rates", rates.get("value") if rates else None, rates_series)
+    gap_note = week_gap_note(market_weekly)
+    range_note = market_weekly.get("range_position_note") or range_position_note(market_weekly.get("range_pos"))
+    chart = render_week_price_chart(market, 890, 330)
+    tracked = sort_weekly_results(results, include_market=True)
+    stock_results = sort_weekly_results(results, include_market=False)
+
     css = f"""
     <style>
       *{{box-sizing:border-box}} body{{margin:0;background:#e8e1d0;font-family:Arial,'Noto Sans TC',sans-serif;color:#26322d}}
       .page{{width:1080px;height:1920px;background:{WEEKLY_BG};padding:48px 58px;overflow:hidden}}
-      .header{{background:{WEEKLY_DARK};color:#fff;border-radius:26px;padding:30px 34px;margin-bottom:24px;border-bottom:8px solid {WEEKLY_GOLD}}}
-      .kicker{{color:{WEEKLY_GOLD};font-size:18px;font-weight:800;letter-spacing:.12em}}.title{{font-size:48px;font-weight:900;line-height:1.15;margin-top:8px}}.date{{font-size:23px;color:#d9d2bd;margin-top:8px}}
-      .section{{background:{WEEKLY_PANEL};border:1px solid #ded4b8;border-radius:22px;padding:24px 28px;margin-bottom:20px;box-shadow:0 10px 24px rgba(18,50,43,.08)}}
-      .section-title{{font-size:29px;font-weight:900;color:{WEEKLY_DARK};margin-bottom:16px}}.brief{{display:grid;grid-template-columns:1.4fr .9fr;gap:18px;align-items:stretch}}
-      .summary{{font-size:34px;font-weight:900;color:{market_weekly.get('posture_color', WEEKLY_DARK)};line-height:1.15}}.summary-sub{{font-size:22px;line-height:1.55;color:#4f5a52;margin-top:12px}}
-      .metric-grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px}}.metric{{background:#f4edd9;border-radius:16px;padding:16px 18px}}.metric-label{{font-size:17px;color:#7a8178}}.metric-value{{font-size:27px;font-weight:900;color:{WEEKLY_DARK};margin-top:5px}}
-      .event-grid{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}.event{{border-left:8px solid var(--c);background:#fbf7eb;border-radius:14px;padding:14px 16px;min-height:112px}}.event-title{{font-size:20px;font-weight:900;line-height:1.32;color:{WEEKLY_DARK}}}.event-note{{font-size:17px;line-height:1.38;color:#536158;margin-top:7px}}
-      .bars{{display:grid;gap:12px}}.bar-row{{display:grid;grid-template-columns:116px 1fr 74px;gap:12px;align-items:center}}.bar-name{{font-size:21px;font-weight:900;color:{WEEKLY_DARK}}}.bar-track{{height:22px;background:#e8dfc8;border-radius:999px;overflow:hidden}}.bar-fill{{height:22px;border-radius:999px;background:var(--c);width:var(--w)}}.bar-val{{font-size:20px;font-weight:900;text-align:right;color:var(--c)}}
-      .matrix{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}.stock-card{{background:#fffdf7;border:1px solid #ded4b8;border-left:10px solid var(--c);border-radius:16px;padding:15px 16px;min-height:156px}}.stock-head{{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}}.stock-name{{font-size:25px;font-weight:900;color:{WEEKLY_DARK}}}.stock-price{{font-size:24px;font-weight:900;color:#24352f}}.stock-status{{display:inline-flex;align-items:center;min-height:34px;background:var(--c);color:#fff;border-radius:999px;padding:0 12px;font-size:17px;font-weight:900;margin-top:10px}}.stock-note{{font-size:16px;color:#536158;line-height:1.38;margin-top:9px;max-height:44px;overflow:hidden}}.tile-row{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:10px}}.tile{{background:#f4edd9;border-radius:10px;padding:8px}}.tile-label{{font-size:12px;color:#7a8178}}.tile-value{{font-size:15px;font-weight:900;color:{WEEKLY_DARK};margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+      .header{{background:{WEEKLY_DARK};color:#fff;border-radius:22px;padding:30px 34px;margin-bottom:22px;border-bottom:8px solid {WEEKLY_GOLD}}}
+      .kicker{{color:{WEEKLY_GOLD};font-size:18px;font-weight:800;letter-spacing:.12em}}.title{{font-size:48px;font-weight:900;line-height:1.12;margin-top:8px}}.date{{font-size:22px;color:#d9d2bd;margin-top:8px}}
+      .section{{background:{WEEKLY_PANEL};border:1px solid #ded4b8;border-radius:20px;padding:22px 26px;margin-bottom:18px;box-shadow:0 8px 22px rgba(18,50,43,.07)}}
+      .section-title{{font-size:29px;font-weight:900;color:{WEEKLY_DARK};margin-bottom:14px}}
+      .market-top{{display:grid;grid-template-columns:1.15fr .85fr;gap:18px;align-items:start}}.summary{{font-size:36px;font-weight:900;color:{market_weekly.get('posture_color', WEEKLY_DARK)};line-height:1.12}}.summary-sub{{font-size:21px;line-height:1.48;color:#4f5a52;margin-top:10px}}
+      .market-number{{text-align:right}}.market-label{{font-size:17px;color:#7a8178}}.market-close{{font-size:46px;font-weight:900;color:{WEEKLY_DARK};line-height:1.08}}.market-chg{{font-size:27px;font-weight:900;color:{_pct_color(market_weekly.get('week_chg_pct'))}}}
+      .note{{background:#fbf7ea;border-left:6px solid {WEEKLY_GOLD};border-radius:10px;padding:10px 13px;color:#4f5a52;font-size:17px;line-height:1.45;margin-top:12px}}
+      .metric-grid{{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-top:14px}}.metric{{background:#f4edd9;border:1px solid #e2d6b9;border-radius:14px;padding:13px 14px;min-height:154px}}.metric-label{{font-size:15px;color:#7a8178}}.metric-value{{font-size:25px;font-weight:900;color:{WEEKLY_DARK};margin-top:4px;line-height:1.1}}.metric-note{{font-size:13px;color:#67736c;line-height:1.35;margin-top:6px;max-height:72px;overflow:hidden}}
+      .event-grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px}}.event{{border-left:8px solid var(--c);background:#fbf7eb;border-radius:14px;padding:13px 15px;min-height:106px}}.event-title{{font-size:20px;font-weight:900;line-height:1.28;color:{WEEKLY_DARK}}}.event-note{{font-size:16px;line-height:1.35;color:#536158;margin-top:7px}}
+      .bars{{display:grid;gap:11px}}.bar-row{{display:grid;grid-template-columns:118px 1fr 78px;gap:12px;align-items:center}}.bar-name{{font-size:21px;font-weight:900;color:{WEEKLY_DARK}}}.bar-track{{height:22px;background:#e8dfc8;border-radius:999px;overflow:hidden}}.bar-fill{{height:22px;border-radius:999px;background:var(--c);width:var(--w)}}.bar-val{{font-size:20px;font-weight:900;text-align:right;color:var(--c)}}
+      .matrix{{display:grid;grid-template-columns:1fr 1fr;gap:13px}}.stock-card{{background:#fffdf7;border:1px solid #ded4b8;border-left:10px solid var(--c);border-radius:16px;padding:14px 15px;min-height:186px}}.stock-head{{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}}.stock-name{{font-size:25px;font-weight:900;color:{WEEKLY_DARK}}}.stock-code{{font-size:15px;color:#7a8178;margin-top:2px}}.stock-price{{font-size:25px;font-weight:900;color:#24352f;text-align:right}}.stock-status{{font-size:16px;font-weight:900;color:var(--c);text-align:right;margin-top:4px}}.stock-note{{font-size:15px;color:#536158;line-height:1.35;margin-top:8px;max-height:40px;overflow:hidden}}
+      .tile-row{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:10px}}.tile{{background:#f4edd9;border-radius:10px;padding:8px}}.tile-label{{font-size:12px;color:#7a8178}}.tile-value{{font-size:15px;font-weight:900;color:{WEEKLY_DARK};margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}.tile-note{{font-size:11px;color:#7a8178;line-height:1.22;margin-top:3px;max-height:28px;overflow:hidden}}
       .footer{{font-size:16px;color:#7a8178;text-align:center;margin-top:10px}}
     </style>
     """
-    metric_html = f"""
-      <div class='metric-grid'>
-        <div class='metric'><div class='metric-label'>加權收盤</div><div class='metric-value'>{market.get('close', 0):.2f}</div></div>
-        <div class='metric'><div class='metric-label'>本週漲跌</div><div class='metric-value' style='color:{_pct_color(market_weekly.get('week_chg_pct'))}'>{pct_text(market_weekly.get('week_chg_pct'))}</div></div>
-        <div class='metric'><div class='metric-label'>週高 / 週低</div><div class='metric-value'>{market_weekly.get('week_high', 0):.0f}/{market_weekly.get('week_low', 0):.0f}</div></div>
-        <div class='metric'><div class='metric-label'>法人週累計（金額）</div><div class='metric-value' style='color:{_pct_color(market_weekly.get('institutional_value'))}'>{inst_value_text}</div>{render_sparkline(market_weekly.get('institutional_daily_values', []), 132, 30)}</div>
-        <div class='metric'><div class='metric-label'>美元/台幣</div><div class='metric-value'>{fx_value}</div>{render_sparkline(fx.get('series', []) if fx else [], 132, 30)}</div>
-        <div class='metric'><div class='metric-label'>美10年債</div><div class='metric-value'>{rates_value}</div>{render_sparkline(rates.get('series', []) if rates else [], 132, 30)}</div>
-      </div>"""
+
     impact_colors = {"高": UP_COLOR, "中高": WARN_COLOR, "中": "#b8871b", "低": NEUTRAL_COLOR}
     events = _social_events(cfg, today, 4)
+    event_items = []
+    event_items.extend(events)
+    if news_items:
+        for item in news_items[: max(0, 4 - len(event_items))]:
+            event_items.append(item)
+    if not event_items:
+        event_items.append({
+            "date": today,
+            "title": "市場週變化觀察",
+            "impact": "中",
+            "note": f"本週加權指數{pct_text(market_weekly.get('week_chg_pct'))}；若新聞來源暫時無資料，仍以價格、法人、匯率與利率作為週報判斷基礎。",
+        })
     event_rows = "".join(
-        f"<div class='event' style='--c:{impact_colors.get(e.get('impact',''), NEUTRAL_COLOR)}'><div class='event-title'>{html_lib.escape(e.get('title',''))}</div><div class='event-note'>{html_lib.escape(e.get('date',''))}｜{html_lib.escape(_social_short_text(e.get('note',''), 62))}</div></div>"
-        for e in events
-    ) or f"<div class='event' style='--c:{WARN_COLOR}'><div class='event-title'>市場週變化觀察</div><div class='event-note'>本週加權指數{pct_text(market_weekly.get('week_chg_pct'))}；若新聞掃描未取得資料，仍以價格、法人、匯率與利率變化作為週報判斷基礎。</div></div>"
+        f"<div class='event' style='--c:{impact_colors.get(e.get('impact',''), NEUTRAL_COLOR)}'><div class='event-title'>{html_lib.escape(_social_short_text(e.get('title',''), 36))}</div><div class='event-note'>{html_lib.escape(e.get('date',''))}｜{html_lib.escape(_social_short_text(e.get('note',''), 66))}</div></div>"
+        for e in event_items[:4]
+    )
+    metric_html = f"""
+      <div class='metric-grid'>
+        <div class='metric'><div class='metric-label'>本週高 / 低 / 收盤位置</div><div class='metric-value'>{market_weekly.get('week_high', 0):.0f}/{market_weekly.get('week_low', 0):.0f}/{market_weekly.get('range_pos', 0):.0f}%</div><div class='metric-note'>{html_lib.escape(_social_short_text(range_note, 58))}</div></div>
+        <div class='metric'><div class='metric-label'>法人週累計（金額）</div><div class='metric-value' style='color:{_pct_color(market_weekly.get('institutional_value'))}'>{inst_value_text}</div>{render_sparkline(inst_series, 150, 32)}<div class='metric-note'>{html_lib.escape(_social_short_text(inst_note, 58))}</div></div>
+        <div class='metric'><div class='metric-label'>美元/台幣</div><div class='metric-value'>{fx_value}</div>{render_sparkline(fx_series, 150, 32)}<div class='metric-note'>{html_lib.escape(_social_short_text(fx_note, 58))}</div></div>
+        <div class='metric'><div class='metric-label'>美10年債</div><div class='metric-value'>{rates_value}</div>{render_sparkline(rates_series, 150, 32)}<div class='metric-note'>{html_lib.escape(_social_short_text(rates_note, 58))}</div></div>
+      </div>"""
     page1 = f"""<!DOCTYPE html><html><head><meta charset='utf-8'>{css}</head><body><div class='page'>
-      <div class='header'><div class='kicker'>TAIWAN EQUITY WEEKLY</div><div class='title'>每週台股趨勢報告</div><div class='date'>{date_text}｜{meta['week_label']}｜一週總結與方向整理</div></div>
-      <div class='section'><div class='brief'><div><div class='summary'>{html_lib.escape(market_weekly.get('posture','觀察'))}</div><div class='summary-sub'>{html_lib.escape(market_weekly.get('trend_summary',''))}<br>{html_lib.escape(market_weekly.get('next_focus',''))}</div></div>{metric_html}</div></div>
-      <div class='section'><div class='section-title'>加權指數 60 日走勢</div>{chart}</div>
-      <div class='section'><div class='section-title'>重大事件回顧</div><div class='event-grid'>{event_rows}</div></div>
+      <div class='header'><div class='kicker'>TAIWAN EQUITY WEEKLY</div><div class='title'>每週台股趨勢報告</div><div class='date'>{date_text}｜{meta['week_label']}｜本週變化、趨勢判斷、下週觀察</div></div>
+      <div class='section'><div class='market-top'><div><div class='summary'>{html_lib.escape(market_weekly.get('posture','觀察'))}</div><div class='summary-sub'>{html_lib.escape(market_weekly.get('trend_summary',''))}<br>{html_lib.escape(market_weekly.get('next_focus',''))}</div></div><div class='market-number'><div class='market-label'>加權指數收盤</div><div class='market-close'>{market.get('close', 0):.2f}</div><div class='market-chg'>{pct_text(market_weekly.get('week_chg_pct'))}</div></div></div><div class='note'><b>口徑說明：</b>本週漲跌＝週一開盤到週五收盤；相對上週五＝上週五收盤到週五收盤。{html_lib.escape(gap_note)}</div>{metric_html}</div>
+      <div class='section'><div class='section-title'>加權指數本週走勢</div>{chart}</div>
+      <div class='section'><div class='section-title'>重大事件與市場脈絡</div><div class='event-grid'>{event_rows}</div></div>
       <div class='footer'>本圖由自動化模型產生，僅供參考，不構成投資建議。</div>
     </div></body></html>"""
 
-    stock_results = results[1:] if results and results[0][1] == "^TWII" else results
-    sorted_results = sorted(stock_results, key=lambda item: item[2].get('weekly', {}).get('week_chg_pct') or 0, reverse=True)
-    max_abs = max([abs(item[2].get('weekly', {}).get('week_chg_pct') or 0) for item in sorted_results] + [1])
+    max_abs = max([abs(item[2].get('weekly', {}).get('week_chg_pct') or 0) for item in stock_results] + [1])
     bars = ""
-    for name, ticker, r in sorted_results:
+    for name, ticker, r in stock_results:
         weekly = r.get('weekly', {})
         chg = weekly.get('week_chg_pct') or 0
         width = max(8, abs(chg) / max_abs * 100)
         color = _pct_color(chg)
         bars += f"<div class='bar-row'><div class='bar-name'>{html_lib.escape(name)}</div><div class='bar-track'><div class='bar-fill' style='--c:{color};--w:{width:.1f}%'></div></div><div class='bar-val' style='--c:{color}'>{pct_text(chg)}</div></div>"
     cards = ""
-    for name, ticker, r in sorted_results:
+    for name, ticker, r in stock_results:
         weekly = r.get('weekly', {})
-        inst_total = weekly.get('institutional_total')
         inst_text = weekly.get('institutional_value_text') or format_twd_billion_short(weekly.get('institutional_value'))
         vol = weekly.get('volume_ratio')
         vol_text = f"{vol:.2f}x" if vol is not None else "-"
-        vol_tip = volume_ratio_note(vol)
         color = weekly.get('posture_color', r.get('border', NEUTRAL_COLOR))
         cards += (
-            f"<div class='stock-card' style='--c:{color}'><div class='stock-head'><div><div class='stock-name'>{html_lib.escape(name)}</div><div style='font-size:15px;color:#7a8178'>{ticker.replace('.TW','').replace('.tw','')}</div></div><div class='stock-price'>{r.get('close',0):.2f}</div></div>"
-            f"<div class='stock-status'>{html_lib.escape(weekly.get('posture','觀察'))}</div><div class='stock-note'>{html_lib.escape(_social_short_text(weekly.get('next_focus',''), 58))}</div>"
-            f"<div class='tile-row'><div class='tile'><div class='tile-label'>本週</div><div class='tile-value' style='color:{_pct_color(weekly.get('week_chg_pct'))}'>{pct_text(weekly.get('week_chg_pct'))}</div></div><div class='tile'><div class='tile-label'>法人金額</div><div class='tile-value' style='color:{_pct_color(weekly.get('institutional_value'))}'>{html_lib.escape(inst_text)}</div></div><div class='tile'><div class='tile-label'>量能</div><div class='tile-value'>{vol_text}</div></div></div><div style='font-size:12px;color:#7a8178;margin-top:6px;line-height:1.25'>{html_lib.escape(vol_tip)}</div></div>"
+            f"<div class='stock-card' style='--c:{color}'><div class='stock-head'><div><div class='stock-name'>{html_lib.escape(name)}</div><div class='stock-code'>{ticker.replace('.TW','').replace('.tw','')}｜{html_lib.escape(weekly.get('week_range_label',''))}</div></div><div><div class='stock-price'>{r.get('close',0):.2f}</div><div class='stock-status'>{html_lib.escape(weekly.get('posture','觀察'))}</div></div></div>"
+            f"<div class='stock-note'>{html_lib.escape(_social_short_text(weekly.get('next_focus',''), 66))}</div>"
+            f"<div class='tile-row'><div class='tile'><div class='tile-label'>本週</div><div class='tile-value' style='color:{_pct_color(weekly.get('week_chg_pct'))}'>{pct_text(weekly.get('week_chg_pct'))}</div><div class='tile-note'>週一開盤至收盤</div></div><div class='tile'><div class='tile-label'>收盤位置</div><div class='tile-value'>{weekly.get('range_pos',0):.0f}%</div><div class='tile-note'>0%=低 / 100%=高</div></div><div class='tile'><div class='tile-label'>法人金額</div><div class='tile-value' style='color:{_pct_color(weekly.get('institutional_value'))}'>{html_lib.escape(inst_text)}</div><div class='tile-note'>大盤為官方金額</div></div></div><div class='tile-row'><div class='tile'><div class='tile-label'>相對上週五</div><div class='tile-value' style='color:{_pct_color(weekly.get('prev_close_chg_pct'))}'>{pct_text(weekly.get('prev_close_chg_pct'))}</div></div><div class='tile'><div class='tile-label'>量能</div><div class='tile-value'>{vol_text}</div><div class='tile-note'>{html_lib.escape(_social_short_text(volume_ratio_note(vol), 24))}</div></div><div class='tile'><div class='tile-label'>均線</div><div class='tile-value'>{html_lib.escape(_social_short_text(weekly.get('ma_position','-'), 18))}</div></div></div></div>"
         )
     page2 = f"""<!DOCTYPE html><html><head><meta charset='utf-8'>{css}</head><body><div class='page'>
-      <div class='header'><div class='kicker'>LARGE CAP MAP</div><div class='title'>權值股週變化地圖</div><div class='date'>{date_text}｜漲跌排名、趨勢分層、下週觀察</div></div>
-      <div class='section'><div class='section-title'>8 檔權值股本週漲跌排名</div><div class='bars'>{bars}</div></div>
+      <div class='header'><div class='kicker'>LARGE CAP MAP</div><div class='title'>權值股週變化地圖</div><div class='date'>{date_text}｜依本週漲跌排序｜趨勢分層與下週觀察</div></div>
+      <div class='section'><div class='section-title'>權值股本週漲跌排名</div><div class='bars'>{bars}</div></div>
       <div class='section'><div class='section-title'>趨勢矩陣</div><div class='matrix'>{cards}</div></div>
       <div class='footer'>完整指標與評分細節請以 Email 報告為準。</div>
     </div></body></html>"""
     return [page1, page2]
+
 
 def save_social_report_pages(pages: list[str], today: str) -> list[Path]:
     paths = []

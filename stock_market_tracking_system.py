@@ -516,6 +516,14 @@ def _fetch_twse_index_data(start_date, end_date) -> pd.DataFrame:
     df = pd.DataFrame(rows, columns=["Date", "Open", "High", "Low", "Close", "Volume"]).drop_duplicates("Date")
     return df.set_index("Date").sort_index()
 
+def _is_fresh_price_data(df: pd.DataFrame, end_date, max_stale_days: int = 7) -> bool:
+    if df is None or df.empty:
+        return False
+    latest = _date_only(df.index[-1])
+    return latest >= (end_date - timedelta(days=max_stale_days))
+
+
+
 def fetch_data(ticker: str, days: int) -> pd.DataFrame:
     # 台股價格優先用證交所官方日資料，避免 yfinance 調整價或暫存造成收盤價失真。
     end = datetime.now(TAIPEI_TZ).date()
@@ -529,7 +537,11 @@ def fetch_data(ticker: str, days: int) -> pd.DataFrame:
         else:
             twse_df = pd.DataFrame()
         if not twse_df.empty:
-            return twse_df[["Open", "High", "Low", "Close", "Volume"]].dropna(subset=["Open", "High", "Low", "Close"])
+            twse_df = twse_df[["Open", "High", "Low", "Close", "Volume"]].dropna(subset=["Open", "High", "Low", "Close"])
+            if _is_fresh_price_data(twse_df, end):
+                return twse_df
+            latest = twse_df.index[-1].strftime("%Y-%m-%d")
+            print(f"⚠️  證交所官方價格資料過舊：{ticker} 最新僅到 {latest}，改用 yfinance 備援")
     except Exception as exc:
         print(f"⚠️  證交所官方價格資料失敗，改用 yfinance 備援：{ticker} {str(exc)[:80]}")
 
@@ -543,7 +555,11 @@ def fetch_data(ticker: str, days: int) -> pd.DataFrame:
     if df.empty:
         raise ValueError(f"無法取得 {ticker} 資料")
     df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-    return df[["Open", "High", "Low", "Close", "Volume"]].dropna()
+    df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
+    if not _is_fresh_price_data(df, datetime.now(TAIPEI_TZ).date()):
+        latest = df.index[-1].strftime("%Y-%m-%d")
+        raise ValueError(f"{ticker} 價格資料過舊，最新僅到 {latest}")
+    return df
 
 
 def _fetch_close_series(ticker: str, days: int = 180) -> pd.Series:
@@ -1021,7 +1037,7 @@ def build_weekly_metrics(df: pd.DataFrame, scfg: dict, inst_week: dict | None,
     range_pos = (close - week_low) / (week_high - week_low) * 100 if week_high != week_low else 50.0
     range_note = range_position_note(range_pos)
     trend_summary = (
-        f"{posture}｜週一開盤至最新收盤{pct_text(week_chg_pct)}，"
+        f"{posture}｜週一開盤至週五收盤{pct_text(week_chg_pct)}，"
         f"收盤位置{range_pos:.0f}%（0%=本週低點、100%=本週高點）"
     )
 
@@ -1782,7 +1798,7 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
         "本週變化",
         f"{pct_text(weekly['week_chg_pct'])}｜高{weekly['week_high']:.2f} / 低{weekly['week_low']:.2f}",
         UP_COLOR if (weekly["week_chg_pct"] or 0) >= 0 else DOWN_COLOR,
-        f"週一開盤={weekly['week_start_open']:.2f}｜最新收盤={close:.2f}｜週一開盤至收盤={pct_text(weekly['week_chg_pct'])}｜相對上週五收盤={pct_text(weekly.get('prev_close_chg_pct'))}"
+        f"週一開盤={weekly['week_start_open']:.2f}｜週五收盤={close:.2f}｜週一開盤至週五收盤={pct_text(weekly['week_chg_pct'])}｜相對上週五收盤={pct_text(weekly.get('prev_close_chg_pct'))}"
     )
     add_item(
         "週成交量",
@@ -2379,8 +2395,8 @@ def render_week_price_chart(result: dict, width: int = 650, height: int = 280) -
     chg = weekly.get("week_chg_pct")
     line_color = _pct_color(chg)
     point_nodes = "".join(
-        f"<circle cx='{x:.1f}' cy='{y:.1f}' r='4.2' fill='{line_color}'/><text x='{x:.1f}' y='{height - 16}' text-anchor='middle' fill='#6f776f' font-size='11'>{html_lib.escape(pt['date'])}</text>"
-        for x, y, pt in pts
+        f"<circle cx='{x:.1f}' cy='{y:.1f}' r='4.2' fill='{line_color}'/>"
+        for x, y, _pt in pts
     )
     poly = " ".join(f"{x:.1f},{y:.1f}" for x, y, _ in pts)
     last_x, last_y, _ = pts[-1]
@@ -2560,7 +2576,7 @@ def weekly_stock_detail_block(name: str, ticker: str, result: dict) -> str:
     vol_note = volume_ratio_note(vol)
     border = weekly.get("posture_color", result.get("border", WEEKLY_DARK))
     cards = [
-        ("本週漲跌", pct_text(week_pct), _pct_color(week_pct), f"週一開盤 {weekly.get('week_start_open', 0):.2f} → 收盤 {result.get('close', 0):.2f}"),
+        ("本週漲跌", pct_text(week_pct), _pct_color(week_pct), f"週一開盤 {weekly.get('week_start_open', 0):.2f} → 週五收盤 {result.get('close', 0):.2f}"),
         ("相對上週五", pct_text(prev_pct), _pct_color(prev_pct), week_gap_note(weekly)),
         ("高低與位置", f"{weekly.get('week_high', 0):.2f} / {weekly.get('week_low', 0):.2f} / {weekly.get('range_pos', 0):.0f}%", WEEKLY_DARK, weekly.get("range_position_note") or range_position_note(weekly.get("range_pos"))),
         ("法人金額", inst_text, _pct_color(weekly.get("institutional_value")), "大盤為證交所金額；個股為張數乘收盤價估算"),
@@ -2851,7 +2867,7 @@ def build_social_report_pages(results: list, today: str, cfg: dict | None = None
         cards += (
             f"<div class='stock-card' style='--c:{color}'><div class='stock-head'><div><div class='stock-name'>{html_lib.escape(name)}</div><div class='stock-code'>{ticker.replace('.TW','').replace('.tw','')}｜{html_lib.escape(weekly.get('week_range_label',''))}</div></div><div><div class='stock-price'>{r.get('close',0):.2f}</div><div class='stock-status'>{html_lib.escape(weekly.get('posture','觀察'))}</div></div></div>"
             f"<div class='stock-note'>{html_lib.escape(_social_short_text(weekly.get('next_focus',''), 66))}</div>"
-            f"<div class='tile-row'><div class='tile'><div class='tile-label'>本週</div><div class='tile-value' style='color:{_pct_color(weekly.get('week_chg_pct'))}'>{pct_text(weekly.get('week_chg_pct'))}</div><div class='tile-note'>週一開盤至收盤</div></div><div class='tile'><div class='tile-label'>收盤位置</div><div class='tile-value'>{weekly.get('range_pos',0):.0f}%</div><div class='tile-note'>0%=低 / 100%=高</div></div><div class='tile'><div class='tile-label'>法人金額</div><div class='tile-value' style='color:{_pct_color(weekly.get('institutional_value'))}'>{html_lib.escape(inst_text)}</div><div class='tile-note'>大盤為官方金額</div></div></div><div class='tile-row'><div class='tile'><div class='tile-label'>相對上週五</div><div class='tile-value' style='color:{_pct_color(weekly.get('prev_close_chg_pct'))}'>{pct_text(weekly.get('prev_close_chg_pct'))}</div></div><div class='tile'><div class='tile-label'>量能</div><div class='tile-value'>{vol_text}</div><div class='tile-note'>{html_lib.escape(_social_short_text(volume_ratio_note(vol), 24))}</div></div><div class='tile'><div class='tile-label'>均線</div><div class='tile-value'>{html_lib.escape(_social_short_text(weekly.get('ma_position','-'), 18))}</div></div></div></div>"
+            f"<div class='tile-row'><div class='tile'><div class='tile-label'>本週</div><div class='tile-value' style='color:{_pct_color(weekly.get('week_chg_pct'))}'>{pct_text(weekly.get('week_chg_pct'))}</div><div class='tile-note'>週一開盤至週五收盤</div></div><div class='tile'><div class='tile-label'>收盤位置</div><div class='tile-value'>{weekly.get('range_pos',0):.0f}%</div><div class='tile-note'>0%=低 / 100%=高</div></div><div class='tile'><div class='tile-label'>法人金額</div><div class='tile-value' style='color:{_pct_color(weekly.get('institutional_value'))}'>{html_lib.escape(inst_text)}</div><div class='tile-note'>大盤為官方金額</div></div></div><div class='tile-row'><div class='tile'><div class='tile-label'>相對上週五</div><div class='tile-value' style='color:{_pct_color(weekly.get('prev_close_chg_pct'))}'>{pct_text(weekly.get('prev_close_chg_pct'))}</div></div><div class='tile'><div class='tile-label'>量能</div><div class='tile-value'>{vol_text}</div><div class='tile-note'>{html_lib.escape(_social_short_text(volume_ratio_note(vol), 24))}</div></div><div class='tile'><div class='tile-label'>均線</div><div class='tile-value'>{html_lib.escape(_social_short_text(weekly.get('ma_position','-'), 18))}</div></div></div></div>"
         )
     page2 = f"""<!DOCTYPE html><html><head><meta charset='utf-8'>{css}</head><body><div class='page'>
       <div class='header'><div class='kicker'>LARGE CAP MAP</div><div class='title'>權值股週變化地圖</div><div class='date'>{date_text}｜依本週漲跌排序｜趨勢分層與下週觀察</div></div>

@@ -32,6 +32,11 @@ WARN_COLOR = "#e67e22"
 INFO_COLOR = "#3498db"
 NEUTRAL_COLOR = "#95a5a6"
 TAIPEI_TZ = timezone(timedelta(hours=8))
+WEEKLY_DARK = "#12322b"
+WEEKLY_DARK_2 = "#1f493f"
+WEEKLY_GOLD = "#c9a227"
+WEEKLY_BG = "#f4f2ea"
+WEEKLY_PANEL = "#fffdf7"
 
 
 def get_report_meta(report_date: datetime | None = None) -> dict:
@@ -309,6 +314,72 @@ def fetch_weekly_institutional(ticker: str, end_date: datetime | None = None, lo
     )
 
 
+def fetch_market_institutional_value_day(day) -> dict | None:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
+        "Referer": "https://www.twse.com.tw/",
+    }
+    date_str = day.strftime("%Y%m%d") if hasattr(day, "strftime") else str(day)
+    url = f"https://www.twse.com.tw/rwd/zh/fund/BFI82U?response=json&dayDate={date_str}&type=day"
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return None
+    if data.get("stat") != "OK":
+        return None
+    fields = data.get("fields", [])
+    rows = data.get("data", [])
+    idx_name = _find_exact_field(fields, "單位名稱") or 0
+    idx_net = _find_exact_field(fields, "買賣差額")
+    if idx_net is None:
+        return None
+    totals = {"foreign": 0, "trust": 0, "dealer": 0, "total": 0}
+    for row in rows:
+        name = str(row[idx_name])
+        net = _parse_int(row[idx_net])
+        if "合計" in name:
+            totals["total"] = net
+        elif "外資及陸資" in name and "不含" in name:
+            totals["foreign"] += net
+        elif "投信" in name:
+            totals["trust"] += net
+        elif "自營商" in name:
+            totals["dealer"] += net
+    if not any(totals.values()):
+        return None
+    return {"date": date_str, **totals}
+
+
+def fetch_market_institutional_value_week(end_date: datetime | None = None, lookback_days: int = 10) -> dict:
+    base = end_date or datetime.now(TAIPEI_TZ)
+    if base.tzinfo is None:
+        base = base.replace(tzinfo=TAIPEI_TZ)
+    iso = base.date().isocalendar()
+    daily = []
+    for offset in range(lookback_days):
+        day = base.date() - timedelta(days=offset)
+        if day.isocalendar()[:2] != iso[:2]:
+            continue
+        item = fetch_market_institutional_value_day(day)
+        if item:
+            daily.append(item)
+    daily.sort(key=lambda x: x["date"])
+    if not daily:
+        return {"success": False, "daily": [], "foreign": 0, "trust": 0, "dealer": 0, "total": None, "error": "本週無三大法人金額資料"}
+    return {
+        "success": True,
+        "daily": daily,
+        "foreign": sum(x["foreign"] for x in daily),
+        "trust": sum(x["trust"] for x in daily),
+        "dealer": sum(x["dealer"] for x in daily),
+        "total": sum(x["total"] for x in daily),
+        "date_range": f"{daily[0]['date']}-{daily[-1]['date']}",
+        "error": "",
+    }
+
+
 # ── 抓取資料 ────────────────────────────────────────────────
 def fetch_data(ticker: str, days: int) -> pd.DataFrame:
     # yfinance 的 end 是「不含當日」的結束日期；收盤後要抓到今天資料，必須設成台灣明天。
@@ -361,6 +432,7 @@ def fetch_market_context() -> dict:
             "value": float(fx.iloc[-1]),
             "chg_5d_pct": _series_change_pct(fx, 5),
             "chg_20d_pct": _series_change_pct(fx, 20),
+            "series": [float(x) for x in fx.tail(20)],
         }
     except Exception as exc:
         context["success"] = False
@@ -375,6 +447,7 @@ def fetch_market_context() -> dict:
             "value": current,
             "chg_5d_bp": (current - float(rates.iloc[-6])) * 100 if len(rates) > 5 else None,
             "chg_20d_bp": (current - float(rates.iloc[-21])) * 100 if len(rates) > 20 else None,
+            "series": [float(x) for x in rates.tail(20)],
         }
     except Exception as exc:
         context["success"] = False
@@ -708,6 +781,18 @@ def build_weekly_metrics(df: pd.DataFrame, scfg: dict, inst_week: dict | None,
     range_pos = (close - week_low) / (week_high - week_low) * 100 if week_high != week_low else 50.0
     trend_summary = f"{posture}｜本週{pct_text(week_chg_pct)}，收盤位於本週區間{range_pos:.0f}%"
     inst_total = inst_week.get("total_net") if inst_week and inst_week.get("success") else None
+    chart_rows = df.tail(60)
+    chart_points = []
+    for idx, row in chart_rows.iterrows():
+        chart_points.append({
+            "date": idx.strftime("%m/%d") if hasattr(idx, "strftime") else str(idx),
+            "close": float(row["Close"]),
+            "ma_s": float(row[f"MA{s}"]) if pd.notna(row[f"MA{s}"]) else None,
+            "ma_m": float(row[f"MA{m}"]) if pd.notna(row[f"MA{m}"]) else None,
+            "ma_l": float(row[f"MA{l}"]) if pd.notna(row[f"MA{l}"]) else None,
+            "volume": float(row["Volume"]),
+        })
+
     return {
         "week_chg": week_chg,
         "week_chg_pct": week_chg_pct,
@@ -719,11 +804,16 @@ def build_weekly_metrics(df: pd.DataFrame, scfg: dict, inst_week: dict | None,
         "volume_ratio": volume_ratio,
         "institutional_week": inst_week,
         "institutional_total": inst_total,
+        "institutional_value": inst_value,
+        "institutional_value_text": format_twd_billion_short(inst_value),
+        "institutional_daily_values": inst_daily_shares,
         "ma_position": ma_position,
         "posture": posture,
         "posture_color": color,
         "trend_summary": trend_summary,
         "next_focus": next_focus,
+        "range_pos": range_pos,
+        "chart_points": chart_points,
     }
 
 
@@ -808,6 +898,32 @@ def format_market_value_text(value: float, unit: str = "張") -> str:
     if value < 0:
         return f"賣超 {abs(value):.0f}{unit}"
     return f"平盤 0{unit}"
+
+
+def format_twd_billion(value: float | None) -> str:
+    if value is None:
+        return "-"
+    action = "買超" if value >= 0 else "賣超"
+    return f"{action} {abs(value) / 100000000:.1f} 億元台幣"
+
+
+def format_twd_billion_short(value: float | None) -> str:
+    if value is None:
+        return "-"
+    action = "買超" if value >= 0 else "賣超"
+    return f"{action}{abs(value) / 100000000:.1f}億"
+
+
+def volume_ratio_note(value: float | None) -> str:
+    if value is None:
+        return "量能資料不足。"
+    if value >= 1.3:
+        return "週日均量明顯高於20日均量；上漲放量偏多，下跌放量偏風險。"
+    if value >= 1.05:
+        return "週日均量略高於20日均量；代表本週交易熱度較平常增加。"
+    if value >= 0.85:
+        return "週日均量接近20日均量；量能屬正常範圍。"
+    return "週日均量低於20日均量；通常代表觀望或量縮整理。"
 
 
 def format_ratio_value(value: float) -> str:
@@ -1394,8 +1510,10 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
     )
     if inst_week and inst_week.get("success"):
         inst_color = UP_COLOR if inst_week["total_net"] >= 0 else DOWN_COLOR
-        inst_value = format_market_value(inst_week["total_net"] / 1000)
-        inst_note = f"本週三大法人合計={inst_value}｜統計{inst_week.get('days', 0)}個交易日｜{inst_week.get('date_range', '')}"
+        inst_shares = format_market_value(inst_week["total_net"] / 1000)
+        inst_amount = format_twd_billion(weekly.get("institutional_value"))
+        inst_value = f"{inst_amount}｜{inst_shares}"
+        inst_note = f"本週三大法人個股買賣超張數來自證交所 T86；金額為張數乘以收盤價的約略估算｜統計{inst_week.get('days', 0)}個交易日｜{inst_week.get('date_range', '')}"
     else:
         inst_color = NEUTRAL_COLOR
         inst_value = "不適用或未取得"
@@ -1838,36 +1956,232 @@ def scoring_rules_html() -> str:
     )
 
 
+
+# ── 週報版呈現輔助 ───────────────────────────────────────────
+def _plain_number(value: float | None, digits: int = 2) -> str:
+    if value is None:
+        return "-"
+    return f"{value:.{digits}f}"
+
+
+def _plain_inst_text(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return format_market_value_text(value / 1000)
+
+
+def _pct_color(value: float | None) -> str:
+    return UP_COLOR if (value or 0) >= 0 else DOWN_COLOR
+
+
+def _escape(value) -> str:
+    return html_lib.escape(str(value or ""))
+
+
+def _svg_polyline(points: list[tuple[float, float]], color: str, width: float = 3.0, dash: str = "") -> str:
+    if len(points) < 2:
+        return ""
+    raw = " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
+    dash_attr = f" stroke-dasharray='{dash}'" if dash else ""
+    return f"<polyline points='{raw}' fill='none' stroke='{color}' stroke-width='{width}' stroke-linecap='round' stroke-linejoin='round'{dash_attr}/>"
+
+
+def render_sparkline(values: list, width: int = 120, height: int = 34, color: str | None = None) -> str:
+    clean = []
+    for value in values or []:
+        try:
+            clean.append(float(value))
+        except Exception:
+            pass
+    if len(clean) < 2:
+        return f"<div style='height:{height}px;color:#9a927e;font-size:11px;'>資料不足</div>"
+    lo, hi = min(clean), max(clean)
+    span = hi - lo or 1.0
+    pts = []
+    for i, value in enumerate(clean):
+        x = width * i / max(len(clean) - 1, 1)
+        y = height - 4 - ((value - lo) / span * (height - 8))
+        pts.append((x, y))
+    line_color = color or (_pct_color(clean[-1] - clean[0]))
+    return f"<svg width='{width}' height='{height}' viewBox='0 0 {width} {height}' xmlns='http://www.w3.org/2000/svg'><polyline points='{' '.join(f'{x:.1f},{y:.1f}' for x,y in pts)}' fill='none' stroke='{line_color}' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/></svg>"
+
+
+def render_price_chart(result: dict, width: int = 760, height: int = 300, compact: bool = False) -> str:
+    weekly = result.get("weekly", {})
+    points = weekly.get("chart_points", [])
+    if len(points) < 2:
+        return "<div style='color:#7a8178;font-size:13px;'>走勢資料不足，暫無線圖。</div>"
+
+    pad_l, pad_r, pad_t, pad_b = 54, 18, 22, 38
+    plot_w = width - pad_l - pad_r
+    plot_h = height - pad_t - pad_b
+    values = []
+    for pt in points:
+        for key in ("close", "ma_s", "ma_m", "ma_l"):
+            val = pt.get(key)
+            if val is not None:
+                values.append(float(val))
+    lo, hi = min(values), max(values)
+    span = hi - lo or 1.0
+
+    def xy(i: int, value: float) -> tuple[float, float]:
+        x = pad_l + (plot_w * i / max(len(points) - 1, 1))
+        y = pad_t + plot_h - ((value - lo) / span * plot_h)
+        return x, y
+
+    def series(key: str, color: str, width_line: float, dash: str = "") -> str:
+        pts = []
+        for i, pt in enumerate(points):
+            val = pt.get(key)
+            if val is not None:
+                pts.append(xy(i, float(val)))
+        return _svg_polyline(pts, color, width_line, dash)
+
+    week_start_idx = max(len(points) - 5, 0)
+    week_start_x = pad_l + plot_w * week_start_idx / max(len(points) - 1, 1)
+    week_points = [xy(i, float(pt["close"])) for i, pt in enumerate(points) if i >= week_start_idx and pt.get("close") is not None]
+    close = points[-1]["close"]
+    week_chg = weekly.get("week_chg_pct")
+    week_color = _pct_color(week_chg)
+    title_size = 18 if compact else 20
+    svg = f"""
+    <svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="近60日價格走勢">
+      <rect x="0" y="0" width="{width}" height="{height}" rx="18" fill="#fffdf7"/>
+      <rect x="{week_start_x:.1f}" y="{pad_t}" width="{width - pad_r - week_start_x:.1f}" height="{plot_h}" fill="#efe5bd" opacity="0.32"/>
+      <line x1="{pad_l}" y1="{pad_t}" x2="{pad_l}" y2="{pad_t + plot_h}" stroke="#d8d1bd"/>
+      <line x1="{pad_l}" y1="{pad_t + plot_h}" x2="{width - pad_r}" y2="{pad_t + plot_h}" stroke="#d8d1bd"/>
+      {series('ma_l', '#8f9a91', 2.0, '6 5')}
+      {series('ma_m', '#c9a227', 2.2)}
+      {series('ma_s', '#6d8f7a', 2.0)}
+      {series('close', '#aeb7ad', 2.4)}
+      {_svg_polyline(week_points, week_color, 6.0)}
+      <text x="{pad_l}" y="{height - 13}" fill="#6f776f" font-size="13">近60日收盤價與 MA10 / MA20 / MA60；粗線為本週5日走勢</text>
+      <text x="{width - pad_r}" y="{pad_t + 4}" text-anchor="end" fill="#12322b" font-size="{title_size}" font-weight="800">{close:.2f} / {pct_text(week_chg)}</text>
+      <text x="{pad_l}" y="18" fill="#6f776f" font-size="12">高 {hi:.2f}</text>
+      <text x="{pad_l}" y="{pad_t + plot_h - 6}" fill="#6f776f" font-size="12">低 {lo:.2f}</text>
+    </svg>"""
+    return svg
+
+
+def weekly_market_overview_html(results: list, macro: dict | None, compact: bool = False) -> str:
+    if not results:
+        return ""
+    market = results[0][2]
+    weekly = market.get("weekly", {})
+    fx = macro.get("fx") if macro else None
+    rates = macro.get("rates") if macro else None
+    chart_w = 920 if compact else 650
+    chart_h = 360 if compact else 280
+    chart = render_price_chart(market, chart_w, chart_h, compact=compact)
+    fx_metric = f"{fx['value']:.3f}" if fx else "-"
+    rates_metric = f"{rates['value']:.2f}%" if rates else "-"
+    inst_value_text = weekly.get("institutional_value_text") or format_twd_billion_short(weekly.get("institutional_value"))
+    inst_series = weekly.get("institutional_daily_values", [])
+    fx_series = fx.get("series", []) if fx else []
+    rates_series = rates.get("series", []) if rates else []
+    metric_style = "background:#f8f4e7;border:1px solid #e5dcc0;border-radius:10px;padding:10px 12px;"
+    return (
+        f'<div style="background:{WEEKLY_PANEL};border:1px solid #e0d7bd;border-radius:14px;padding:18px 20px;margin-bottom:24px;">'
+        f'<div style="display:flex;justify-content:space-between;gap:18px;align-items:flex-start;">'
+        f'<div style="min-width:0;flex:1;">'
+        f'<div style="color:{WEEKLY_GOLD};font-size:12px;font-weight:bold;letter-spacing:.08em;">WEEKLY MARKET BRIEF</div>'
+        f'<div style="color:{WEEKLY_DARK};font-size:24px;font-weight:800;margin-top:4px;">{_escape(weekly.get("posture", "觀察"))}</div>'
+        f'<div style="color:#4f5a52;font-size:14px;line-height:1.7;margin-top:8px;">{_escape(weekly.get("trend_summary", ""))}<br>{_escape(weekly.get("next_focus", ""))}</div>'
+        f'</div>'
+        f'<div style="text-align:right;white-space:nowrap;">'
+        f'<div style="color:#6f776f;font-size:12px;">加權指數收盤</div>'
+        f'<div style="color:{WEEKLY_DARK};font-size:30px;font-weight:800;">{market.get("close", 0):.2f}</div>'
+        f'<div style="color:{_pct_color(weekly.get("week_chg_pct"))};font-size:16px;font-weight:800;">{pct_text(weekly.get("week_chg_pct"))}</div>'
+        f'</div></div>'
+        f'<div style="margin-top:16px;">{chart}</div>'
+        f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px;">'
+        f'<div style="{metric_style}"><div style="font-size:11px;color:#7a8178;">本週高 / 低</div><div style="font-size:15px;font-weight:800;color:{WEEKLY_DARK};">{weekly.get("week_high", 0):.2f} / {weekly.get("week_low", 0):.2f}</div></div>'
+        f'<div style="{metric_style}"><div style="font-size:11px;color:#7a8178;">法人週合計（金額）</div><div style="font-size:15px;font-weight:800;color:{_pct_color(weekly.get("institutional_value"))};">{inst_value_text}</div>{render_sparkline(inst_series, 118, 28)}</div>'
+        f'<div style="{metric_style}"><div style="font-size:11px;color:#7a8178;">美元/台幣</div><div style="font-size:15px;font-weight:800;color:{WEEKLY_DARK};">{fx_metric}</div>{render_sparkline(fx_series, 118, 28)}</div>'
+        f'<div style="{metric_style}"><div style="font-size:11px;color:#7a8178;">美10年債</div><div style="font-size:15px;font-weight:800;color:{WEEKLY_DARK};">{rates_metric}</div>{render_sparkline(rates_series, 118, 28)}</div>'
+        f'</div></div>'
+    )
+
+
+def weekly_stock_scoreboard_html(results: list) -> str:
+    stock_results = results[1:] if results and results[0][1] == "^TWII" else results
+    sorted_results = sorted(stock_results, key=lambda item: item[2].get("weekly", {}).get("week_chg_pct") or 0, reverse=True)
+    rows = ""
+    max_abs = max([abs(item[2].get("weekly", {}).get("week_chg_pct") or 0) for item in sorted_results] + [1])
+    for name, ticker, r in sorted_results:
+        weekly = r.get("weekly", {})
+        chg = weekly.get("week_chg_pct") or 0
+        width = max(8, abs(chg) / max_abs * 100)
+        color = UP_COLOR if chg >= 0 else DOWN_COLOR
+        rows += (
+            f'<div style="display:grid;grid-template-columns:92px 1fr 64px;gap:10px;align-items:center;margin:8px 0;">'
+            f'<div style="font-size:13px;font-weight:800;color:{WEEKLY_DARK};">{_escape(name)}</div>'
+            f'<div style="height:16px;background:#ebe6d6;border-radius:99px;overflow:hidden;"><div style="height:16px;width:{width:.1f}%;background:{color};border-radius:99px;"></div></div>'
+            f'<div style="font-size:13px;font-weight:800;text-align:right;color:{color};">{pct_text(chg)}</div>'
+            f'</div>'
+        )
+    return f'<div style="background:{WEEKLY_PANEL};border:1px solid #e0d7bd;border-radius:14px;padding:16px 18px;margin-bottom:24px;"><h3 style="margin:0 0 10px;color:{WEEKLY_DARK};font-size:18px;">權值股本週漲跌排名</h3>{rows}</div>'
+
+
+def weekly_trend_matrix_html(results: list) -> str:
+    rows = ""
+    for name, ticker, r in results:
+        weekly = r.get("weekly", {})
+        inst = weekly.get("institutional_value_text") or format_twd_billion_short(weekly.get("institutional_value"))
+        vol = weekly.get("volume_ratio")
+        vol_text = f"{vol:.2f}x" if vol is not None else "-"
+        vol_tip = volume_ratio_note(vol)
+        rows += (
+            f'<tr style="border-bottom:1px solid #e7dfc9;">'
+            f'<td style="padding:9px 8px;font-weight:800;color:{WEEKLY_DARK};">{_escape(name)}</td>'
+            f'<td style="padding:9px 8px;color:{weekly.get("posture_color", WEEKLY_DARK)};font-weight:800;">{_escape(weekly.get("posture", "觀察"))}</td>'
+            f'<td style="padding:9px 8px;text-align:right;color:{_pct_color(weekly.get("week_chg_pct"))};font-weight:800;">{pct_text(weekly.get("week_chg_pct"))}</td>'
+            f'<td style="padding:9px 8px;color:#4f5a52;line-height:1.5;white-space:normal;">{_escape(weekly.get("ma_position", "-"))}</td>'
+            f'<td style="padding:9px 8px;text-align:right;color:{_pct_color(weekly.get("institutional_value"))};font-weight:800;">{_escape(inst)}</td>'
+            f'<td style="padding:9px 8px;text-align:right;color:#4f5a52;" title="{_escape(vol_tip)}">{vol_text}</td>'
+            f'</tr>'
+        )
+    return (
+        f'<div style="background:{WEEKLY_PANEL};border:1px solid #e0d7bd;border-radius:14px;padding:16px 18px;margin-bottom:24px;">'
+        f'<h3 style="margin:0 0 10px;color:{WEEKLY_DARK};font-size:18px;">趨勢矩陣</h3>'
+        f'<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+        f'<thead><tr style="background:#efe7cf;color:{WEEKLY_DARK};"><th style="padding:8px;text-align:left;width:90px;">標的</th><th style="padding:8px;text-align:left;width:80px;">狀態</th><th style="padding:8px;text-align:right;width:64px;">本週</th><th style="padding:8px;text-align:left;">均線</th><th style="padding:8px;text-align:right;width:100px;">法人金額</th><th style="padding:8px;text-align:right;width:70px;">量能</th></tr></thead>'
+        f'<tbody>{rows}</tbody></table></div>'
+    )
+
 # ── 組裝 HTML Email ──────────────────────────────────────────
 def build_email_html(results: list, today: str, cfg: dict | None = None,
                      macro: dict | None = None, news_items: list | None = None) -> str:
     meta = get_report_meta(datetime.strptime(today, "%Y-%m-%d").replace(tzinfo=TAIPEI_TZ))
-    overview = summary_table(results)
+    market_brief = weekly_market_overview_html(results, macro)
+    scoreboard = weekly_stock_scoreboard_html(results)
+    matrix = weekly_trend_matrix_html(results)
     events_block = market_events_html(cfg or {}, today, news_items)
     rules_block = scoring_rules_html()
-    details  = "".join(
-        stock_html_block(n, t, r, note=r.get("stock_note",""))
-        for n, t, r in results)
-    return (f'<!DOCTYPE html><html><head><meta charset="utf-8"></head>'
-            f'<body style="font-family:Arial,sans-serif;max-width:720px;margin:0 auto;'
-            f'padding:20px;background:#f4f6f8;">'
-            f'<div style="background:#2c3e50;color:#fff;padding:20px;'
-            f'border-radius:10px 10px 0 0;text-align:center;">'
-            f'<h2 style="margin:0;">📊 每週台股趨勢報告</h2>'
-            f'<p style="margin:6px 0 0;opacity:.8;">{today}｜{meta["week_label"]}｜本週變化、趨勢判斷、下週觀察</p></div>'
-            f'<div style="background:#fff;padding:24px;border-radius:0 0 10px 10px;'
-            f'box-shadow:0 2px 8px rgba(0,0,0,.08);">'
-            f'{rules_block}'
-            f'{events_block}'
-            f'<h3 style="color:#2c3e50;border-bottom:2px solid #2c3e50;padding-bottom:6px;">本週總覽</h3>'
-            f'{overview}'
-            f'<h3 style="color:#2c3e50;border-bottom:2px solid #2c3e50;padding-bottom:6px;">各股週趨勢與下週觀察</h3>'
-            f'{details}'
-            f'<p style="color:#aaa;font-size:11px;text-align:center;'
-            f'border-top:1px solid #eee;padding-top:12px;margin-top:8px;">'
-            f'⚠️ 本報告由自動化程式產生，僅供參考，不構成投資建議。</p>'
-            f'</div></body></html>')
-
+    details = "".join(
+        stock_html_block(n, t, r, note=r.get("stock_note", ""))
+        for n, t, r in results
+    )
+    return (
+        f'<!DOCTYPE html><html><head><meta charset="utf-8"></head>'
+        f'<body style="font-family:Arial,sans-serif;max-width:760px;margin:0 auto;padding:20px;background:{WEEKLY_BG};">'
+        f'<div style="background:{WEEKLY_DARK};color:#fff;padding:24px 26px;border-radius:14px 14px 0 0;">'
+        f'<div style="color:{WEEKLY_GOLD};font-size:12px;font-weight:bold;letter-spacing:.12em;">TAIWAN EQUITY WEEKLY</div>'
+        f'<h2 style="margin:6px 0 0;font-size:28px;line-height:1.25;">每週台股趨勢報告</h2>'
+        f'<p style="margin:8px 0 0;color:#d9d2bd;">{today}｜{meta["week_label"]}｜一週總結、方向整理、下週觀察</p></div>'
+        f'<div style="background:#fffaf0;padding:24px;border-radius:0 0 14px 14px;box-shadow:0 8px 24px rgba(18,50,43,.10);">'
+        f'{market_brief}'
+        f'{scoreboard}'
+        f'{matrix}'
+        f'{events_block}'
+        f'<h3 style="color:{WEEKLY_DARK};border-bottom:2px solid {WEEKLY_GOLD};padding-bottom:6px;">指標解讀規則</h3>'
+        f'{rules_block}'
+        f'<h3 style="color:{WEEKLY_DARK};border-bottom:2px solid {WEEKLY_GOLD};padding-bottom:6px;">各股指標明細</h3>'
+        f'{details}'
+        f'<p style="color:#9a927e;font-size:11px;text-align:center;border-top:1px solid #e6ddc7;padding-top:12px;margin-top:8px;">'
+        f'本報告由自動化模型產生，僅供參考，不構成投資建議。</p>'
+        f'</div></body></html>'
+    )
 
 def _social_item_detail(result: dict, label: str, default: str = "-") -> tuple[str, str, str]:
     for item_label, value, color, note in result.get("items", []):
@@ -1993,97 +2307,81 @@ def build_social_report_pages(results: list, today: str, cfg: dict | None = None
     news_items = news_items or []
     date_text = today.replace("-", "/")
     meta = get_report_meta(datetime.strptime(today, "%Y-%m-%d").replace(tzinfo=TAIPEI_TZ))
-    css = """
-    <style>
-      *{box-sizing:border-box} body{margin:0;background:#eef2f5;font-family:Arial,'Noto Sans TC',sans-serif;color:#1f2d3d}
-      .page{width:1080px;height:1920px;background:#f7f9fb;padding:54px 60px;overflow:hidden}.page-stocks{padding:38px 50px}
-      .header{background:#243447;color:#fff;border-radius:24px;padding:30px 34px;margin-bottom:28px}.page-stocks .header{padding:24px 30px;margin-bottom:20px}
-      .title{font-size:42px;font-weight:800;line-height:1.2}.date{font-size:24px;opacity:.82;margin-top:8px}
-      .section{background:#fff;border:1px solid #dfe6ee;border-radius:22px;padding:24px 28px;margin-bottom:22px;box-shadow:0 8px 20px rgba(31,45,61,.06)}
-      .section-title{font-size:28px;font-weight:800;margin-bottom:18px;color:#243447;display:flex;align-items:center;gap:10px}
-      .market-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}.metric{background:#f3f6f9;border-radius:16px;padding:16px}.metric-label{font-size:18px;color:#6b7785}.metric-value{font-size:28px;font-weight:800;margin-top:6px}
-      .pulse{margin-top:16px;border-left:8px solid var(--c);background:#fbfcfd;border-radius:14px;padding:14px 18px}.pulse-main{font-size:24px;font-weight:800;color:var(--c)}.pulse-sub{font-size:19px;line-height:1.45;color:#536171;margin-top:6px}
-      .event-grid,.news-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.event,.news{border-left:8px solid var(--c);background:#fbfcfd;border-radius:14px;padding:14px 16px;min-height:118px}.event-title,.news-title{font-size:20px;font-weight:800;line-height:1.35}.event-meta,.news-meta{font-size:16px;color:#7b8794;margin-top:7px}.event-note,.news-note{font-size:17px;line-height:1.4;color:#536171;margin-top:7px}
-      .cards{height:1648px;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:repeat(4,1fr);gap:18px}.card{background:#fff;border:1px solid #dfe6ee;border-left:10px solid var(--c);border-radius:20px;padding:16px 18px;overflow:hidden;display:flex;flex-direction:column}.card-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.card-name{font-size:25px;font-weight:800}.code{font-size:16px;color:#7b8794;margin-top:2px}.price{font-size:24px;font-weight:800}.badge{display:flex;align-items:center;background:var(--c);color:#fff;border-radius:999px;padding:0 14px;font-size:16px;font-weight:800;line-height:1.18;min-height:42px;margin:9px 0 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.badge span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.op{font-size:21px;font-weight:800;line-height:1.25}.reason{font-size:17px;line-height:1.34;color:#4a5562;margin-top:4px;max-height:68px;overflow:hidden}.indicator-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:auto;padding-top:10px}.ind{background:#f5f7f9;border-radius:12px;padding:8px 10px;min-height:70px;overflow:hidden}.ind-title{font-size:14px;color:#7b8794}.ind-value{font-size:16px;font-weight:800;line-height:1.22;margin-top:2px;overflow:hidden;text-overflow:ellipsis}.ind-note{font-size:13px;color:#8a96a3;line-height:1.2;margin-top:2px}.footer{font-size:16px;color:#7b8794;text-align:center;margin-top:10px}
-    </style>
-    """
     market = results[0][2] if results else {}
     market_weekly = market.get("weekly", {})
     fx = macro.get("fx") if macro else None
     rates = macro.get("rates") if macro else None
-    market_summary = html_lib.escape(market_weekly.get("trend_summary", market.get("summary", "無訊號")))
-    market_headline = html_lib.escape(market_weekly.get("posture", "觀察"))
-    market_reason = html_lib.escape(_social_short_text(market_weekly.get("next_focus", ""), 92))
-    market_color = market_weekly.get("posture_color", market.get("border", NEUTRAL_COLOR))
     fx_value = f"{fx['value']:.3f}" if fx else "-"
     rates_value = f"{rates['value']:.2f}%" if rates else "-"
-    market_html = f"""
-      <div class='section'><div class='section-title'>📌 收盤快照</div>
-        <div class='market-grid'>
-          <div class='metric'><div class='metric-label'>台股加權</div><div class='metric-value'>{market.get('close', 0):.2f}</div></div>
-          <div class='metric'><div class='metric-label'>本週漲跌</div><div class='metric-value'>{pct_text(market_weekly.get('week_chg_pct'))}</div></div>
-          <div class='metric'><div class='metric-label'>本週高低</div><div class='metric-value'>{market_weekly.get('week_high', 0):.0f}/{market_weekly.get('week_low', 0):.0f}</div></div>
-        </div>
-        <div class='market-grid' style='margin-top:14px'>
-          <div class='metric'><div class='metric-label'>美元/台幣</div><div class='metric-value'>{fx_value}</div></div>
-          <div class='metric'><div class='metric-label'>美10年債殖利率</div><div class='metric-value'>{rates_value}</div></div>
-          <div class='metric'><div class='metric-label'>年度週數</div><div class='metric-value'>Week {meta['week']}</div></div>
-        </div>
-        <div class='pulse' style='--c:{market_color}'><div class='pulse-main'>{market_summary}｜{market_headline}</div><div class='pulse-sub'>{market_reason}</div></div>
+    inst_value_text = market_weekly.get("institutional_value_text") or format_twd_billion_short(market_weekly.get("institutional_value"))
+    chart = render_price_chart(market, 930, 420, compact=True)
+    css = f"""
+    <style>
+      *{{box-sizing:border-box}} body{{margin:0;background:#e8e1d0;font-family:Arial,'Noto Sans TC',sans-serif;color:#26322d}}
+      .page{{width:1080px;height:1920px;background:{WEEKLY_BG};padding:48px 58px;overflow:hidden}}
+      .header{{background:{WEEKLY_DARK};color:#fff;border-radius:26px;padding:30px 34px;margin-bottom:24px;border-bottom:8px solid {WEEKLY_GOLD}}}
+      .kicker{{color:{WEEKLY_GOLD};font-size:18px;font-weight:800;letter-spacing:.12em}}.title{{font-size:48px;font-weight:900;line-height:1.15;margin-top:8px}}.date{{font-size:23px;color:#d9d2bd;margin-top:8px}}
+      .section{{background:{WEEKLY_PANEL};border:1px solid #ded4b8;border-radius:22px;padding:24px 28px;margin-bottom:20px;box-shadow:0 10px 24px rgba(18,50,43,.08)}}
+      .section-title{{font-size:29px;font-weight:900;color:{WEEKLY_DARK};margin-bottom:16px}}.brief{{display:grid;grid-template-columns:1.4fr .9fr;gap:18px;align-items:stretch}}
+      .summary{{font-size:34px;font-weight:900;color:{market_weekly.get('posture_color', WEEKLY_DARK)};line-height:1.15}}.summary-sub{{font-size:22px;line-height:1.55;color:#4f5a52;margin-top:12px}}
+      .metric-grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px}}.metric{{background:#f4edd9;border-radius:16px;padding:16px 18px}}.metric-label{{font-size:17px;color:#7a8178}}.metric-value{{font-size:27px;font-weight:900;color:{WEEKLY_DARK};margin-top:5px}}
+      .event-grid{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}.event{{border-left:8px solid var(--c);background:#fbf7eb;border-radius:14px;padding:14px 16px;min-height:112px}}.event-title{{font-size:20px;font-weight:900;line-height:1.32;color:{WEEKLY_DARK}}}.event-note{{font-size:17px;line-height:1.38;color:#536158;margin-top:7px}}
+      .bars{{display:grid;gap:12px}}.bar-row{{display:grid;grid-template-columns:116px 1fr 74px;gap:12px;align-items:center}}.bar-name{{font-size:21px;font-weight:900;color:{WEEKLY_DARK}}}.bar-track{{height:22px;background:#e8dfc8;border-radius:999px;overflow:hidden}}.bar-fill{{height:22px;border-radius:999px;background:var(--c);width:var(--w)}}.bar-val{{font-size:20px;font-weight:900;text-align:right;color:var(--c)}}
+      .matrix{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}.stock-card{{background:#fffdf7;border:1px solid #ded4b8;border-left:10px solid var(--c);border-radius:16px;padding:15px 16px;min-height:156px}}.stock-head{{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}}.stock-name{{font-size:25px;font-weight:900;color:{WEEKLY_DARK}}}.stock-price{{font-size:24px;font-weight:900;color:#24352f}}.stock-status{{display:inline-flex;align-items:center;min-height:34px;background:var(--c);color:#fff;border-radius:999px;padding:0 12px;font-size:17px;font-weight:900;margin-top:10px}}.stock-note{{font-size:16px;color:#536158;line-height:1.38;margin-top:9px;max-height:44px;overflow:hidden}}.tile-row{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:10px}}.tile{{background:#f4edd9;border-radius:10px;padding:8px}}.tile-label{{font-size:12px;color:#7a8178}}.tile-value{{font-size:15px;font-weight:900;color:{WEEKLY_DARK};margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+      .footer{{font-size:16px;color:#7a8178;text-align:center;margin-top:10px}}
+    </style>
+    """
+    metric_html = f"""
+      <div class='metric-grid'>
+        <div class='metric'><div class='metric-label'>加權收盤</div><div class='metric-value'>{market.get('close', 0):.2f}</div></div>
+        <div class='metric'><div class='metric-label'>本週漲跌</div><div class='metric-value' style='color:{_pct_color(market_weekly.get('week_chg_pct'))}'>{pct_text(market_weekly.get('week_chg_pct'))}</div></div>
+        <div class='metric'><div class='metric-label'>週高 / 週低</div><div class='metric-value'>{market_weekly.get('week_high', 0):.0f}/{market_weekly.get('week_low', 0):.0f}</div></div>
+        <div class='metric'><div class='metric-label'>法人週合計（金額）</div><div class='metric-value' style='color:{_pct_color(market_weekly.get('institutional_value'))}'>{inst_value_text}</div>{render_sparkline(market_weekly.get('institutional_daily_values', []), 132, 30)}</div>
+        <div class='metric'><div class='metric-label'>美元/台幣</div><div class='metric-value'>{fx_value}</div>{render_sparkline(fx.get('series', []) if fx else [], 132, 30)}</div>
+        <div class='metric'><div class='metric-label'>美10年債</div><div class='metric-value'>{rates_value}</div>{render_sparkline(rates.get('series', []) if rates else [], 132, 30)}</div>
       </div>"""
-
-    impact_colors = {"高": UP_COLOR, "中高": WARN_COLOR, "中": "#f39c12", "低": NEUTRAL_COLOR}
+    impact_colors = {"高": UP_COLOR, "中高": WARN_COLOR, "中": "#b8871b", "低": NEUTRAL_COLOR}
     events = _social_events(cfg, today, 4)
     event_rows = "".join(
-        f"<div class='event' style='--c:{impact_colors.get(e.get('impact',''), NEUTRAL_COLOR)}'>"
-        f"<div class='event-title'>{html_lib.escape(e.get('title',''))}</div>"
-        f"<div class='event-meta'>{html_lib.escape(e.get('date',''))}｜影響 {html_lib.escape(e.get('impact','未評估'))}</div>"
-        f"<div class='event-note'>{html_lib.escape(_social_short_text(e.get('note',''), 58))}</div>"
-        f"</div>"
+        f"<div class='event' style='--c:{impact_colors.get(e.get('impact',''), NEUTRAL_COLOR)}'><div class='event-title'>{html_lib.escape(e.get('title',''))}</div><div class='event-note'>{html_lib.escape(e.get('date',''))}｜{html_lib.escape(_social_short_text(e.get('note',''), 62))}</div></div>"
         for e in events
-    ) or "<div class='event' style='--c:#95a5a6'><div class='event-title'>近期無固定重大事件</div><div class='event-note'>固定行事曆會顯示今天前後 14 天內的事件。</div></div>"
-
-    news_rows = "".join(
-        f"<div class='news' style='--c:{impact_colors.get(n.get('impact',''), WARN_COLOR)}'>"
-        f"<div class='news-title'>{html_lib.escape(_social_short_text(n.get('title',''), 48))}</div>"
-        f"<div class='news-meta'>{html_lib.escape(n.get('date',''))}｜{html_lib.escape(n.get('source','Google News'))}</div>"
-        f"<div class='news-note'>{html_lib.escape(n.get('scope','市場'))}｜{html_lib.escape(_social_short_text(n.get('note',''), 36))}</div>"
-        f"</div>"
-        for n in news_items[:8]
-    ) or "<div class='news' style='--c:#95a5a6'><div class='news-title'>近 3 天尚未抓到高關聯新聞</div><div class='news-note'>請以 Email 報告內的消息面區塊為準。</div></div>"
-
+    ) or f"<div class='event' style='--c:{WARN_COLOR}'><div class='event-title'>市場週變化觀察</div><div class='event-note'>本週加權指數{pct_text(market_weekly.get('week_chg_pct'))}；若新聞掃描未取得資料，仍以價格、法人、匯率與利率變化作為週報判斷基礎。</div></div>"
     page1 = f"""<!DOCTYPE html><html><head><meta charset='utf-8'>{css}</head><body><div class='page'>
-      <div class='header'><div class='title'>每週台股趨勢報告</div><div class='date'>{date_text}｜{meta['week_label']}｜本週變化與下週觀察</div></div>
-      {market_html}
-      <div class='section'><div class='section-title'>🗓️ 近期重大事件</div><div class='event-grid'>{event_rows}</div></div>
-      <div class='section'><div class='section-title'>🗞️ 近 3 天市場新聞</div><div class='news-grid'>{news_rows}</div></div>
+      <div class='header'><div class='kicker'>TAIWAN EQUITY WEEKLY</div><div class='title'>每週台股趨勢報告</div><div class='date'>{date_text}｜{meta['week_label']}｜一週總結與方向整理</div></div>
+      <div class='section'><div class='brief'><div><div class='summary'>{html_lib.escape(market_weekly.get('posture','觀察'))}</div><div class='summary-sub'>{html_lib.escape(market_weekly.get('trend_summary',''))}<br>{html_lib.escape(market_weekly.get('next_focus',''))}</div></div>{metric_html}</div></div>
+      <div class='section'><div class='section-title'>加權指數 60 日走勢</div>{chart}</div>
+      <div class='section'><div class='section-title'>重大事件回顧</div><div class='event-grid'>{event_rows}</div></div>
       <div class='footer'>本圖由自動化模型產生，僅供參考，不構成投資建議。</div>
     </div></body></html>"""
 
+    stock_results = results[1:] if results and results[0][1] == "^TWII" else results
+    sorted_results = sorted(stock_results, key=lambda item: item[2].get('weekly', {}).get('week_chg_pct') or 0, reverse=True)
+    max_abs = max([abs(item[2].get('weekly', {}).get('week_chg_pct') or 0) for item in sorted_results] + [1])
+    bars = ""
+    for name, ticker, r in sorted_results:
+        weekly = r.get('weekly', {})
+        chg = weekly.get('week_chg_pct') or 0
+        width = max(8, abs(chg) / max_abs * 100)
+        color = _pct_color(chg)
+        bars += f"<div class='bar-row'><div class='bar-name'>{html_lib.escape(name)}</div><div class='bar-track'><div class='bar-fill' style='--c:{color};--w:{width:.1f}%'></div></div><div class='bar-val' style='--c:{color}'>{pct_text(chg)}</div></div>"
     cards = ""
-    for name, ticker, r in results:
-        code = ticker.replace(".TW", "").replace(".tw", "")
-        weekly = r.get("weekly", {})
-        regime = r.get("regime", {})
-        inst_total = weekly.get("institutional_total")
-        inst_text = format_market_value_text(inst_total / 1000) if inst_total is not None else "-"
-        inst_color = UP_COLOR if (inst_total or 0) >= 0 else DOWN_COLOR
+    for name, ticker, r in sorted_results:
+        weekly = r.get('weekly', {})
+        inst_total = weekly.get('institutional_total')
+        inst_text = weekly.get('institutional_value_text') or format_twd_billion_short(weekly.get('institutional_value'))
+        vol = weekly.get('volume_ratio')
+        vol_text = f"{vol:.2f}x" if vol is not None else "-"
+        vol_tip = volume_ratio_note(vol)
+        color = weekly.get('posture_color', r.get('border', NEUTRAL_COLOR))
         cards += (
-            f"<div class='card' style='--c:{weekly.get('posture_color', r.get('border', NEUTRAL_COLOR))}'>"
-            f"<div class='card-head'><div><div class='card-name'>{html_lib.escape(name)}</div><div class='code'>{code}</div></div><div class='price'>{r.get('close',0):.2f}</div></div>"
-            f"<div class='badge'><span>{html_lib.escape(weekly.get('trend_summary','觀察'))}</span></div>"
-            f"<div class='op'>{html_lib.escape(weekly.get('posture','觀察'))}</div>"
-            f"<div class='reason'>{html_lib.escape(_social_short_text(weekly.get('next_focus',''), 76))}</div>"
-            f"<div class='indicator-grid'>"
-            f"<div class='ind'><div class='ind-title'>本週漲跌</div><div class='ind-value'>{pct_text(weekly.get('week_chg_pct'))}</div><div class='ind-note'>高{weekly.get('week_high',0):.2f} / 低{weekly.get('week_low',0):.2f}</div></div>"
-            f"<div class='ind'><div class='ind-title'>均線位置</div><div class='ind-value' style='color:{weekly.get('posture_color', NEUTRAL_COLOR)}'>{html_lib.escape(_social_short_text(weekly.get('ma_position','-'), 18))}</div><div class='ind-note'>{html_lib.escape(regime.get('label','-'))}</div></div>"
-            f"<div class='ind'><div class='ind-title'>法人週合計</div><div class='ind-value' style='color:{inst_color}'>{html_lib.escape(inst_text)}</div><div class='ind-note'>三大法人買賣超</div></div>"
-            f"<div class='ind'><div class='ind-title'>量能</div><div class='ind-value'>{weekly.get('volume_ratio', 0):.2f}x</div><div class='ind-note'>週日均量 / 20日均量</div></div>"
-            f"</div></div>"
+            f"<div class='stock-card' style='--c:{color}'><div class='stock-head'><div><div class='stock-name'>{html_lib.escape(name)}</div><div style='font-size:15px;color:#7a8178'>{ticker.replace('.TW','').replace('.tw','')}</div></div><div class='stock-price'>{r.get('close',0):.2f}</div></div>"
+            f"<div class='stock-status'>{html_lib.escape(weekly.get('posture','觀察'))}</div><div class='stock-note'>{html_lib.escape(_social_short_text(weekly.get('next_focus',''), 58))}</div>"
+            f"<div class='tile-row'><div class='tile'><div class='tile-label'>本週</div><div class='tile-value' style='color:{_pct_color(weekly.get('week_chg_pct'))}'>{pct_text(weekly.get('week_chg_pct'))}</div></div><div class='tile'><div class='tile-label'>法人金額</div><div class='tile-value' style='color:{_pct_color(weekly.get('institutional_value'))}'>{html_lib.escape(inst_text)}</div></div><div class='tile'><div class='tile-label'>量能</div><div class='tile-value'>{vol_text}</div></div></div><div style='font-size:12px;color:#7a8178;margin-top:6px;line-height:1.25'>{html_lib.escape(vol_tip)}</div></div>"
         )
-    page2 = f"""<!DOCTYPE html><html><head><meta charset='utf-8'>{css}</head><body><div class='page page-stocks'>
-      <div class='header'><div class='title'>8檔權值股週變化</div><div class='date'>{date_text}｜下週觀察重點</div></div>
-      <div class='cards'>{cards}</div>
+    page2 = f"""<!DOCTYPE html><html><head><meta charset='utf-8'>{css}</head><body><div class='page'>
+      <div class='header'><div class='kicker'>LARGE CAP MAP</div><div class='title'>權值股週變化地圖</div><div class='date'>{date_text}｜漲跌排名、趨勢分層、下週觀察</div></div>
+      <div class='section'><div class='section-title'>8 檔權值股本週漲跌排名</div><div class='bars'>{bars}</div></div>
+      <div class='section'><div class='section-title'>趨勢矩陣</div><div class='matrix'>{cards}</div></div>
       <div class='footer'>完整指標與評分細節請以 Email 報告為準。</div>
     </div></body></html>"""
     return [page1, page2]
@@ -2377,6 +2675,8 @@ def main():
     news_items = fetch_auto_news(cfg)
     print(f"  自動新聞掃描：取得 {len(news_items)} 則高關聯新聞")
 
+    market_inst_value_week = fetch_market_institutional_value_week(now_tw)
+
     results = []
     for stock in cfg["watchlist"]:
         ticker = stock["ticker"]
@@ -2394,6 +2694,11 @@ def main():
             inst = fetch_institutional(ticker) if scfg.get("use_institutional", True) else None
             inst_week = fetch_weekly_institutional(ticker, data_dt) if scfg.get("use_institutional", True) else None
             r    = evaluate_weighted(df, scfg, inst, macro, inst_week)
+            if ticker == "^TWII" and market_inst_value_week.get("success"):
+                r["weekly"]["institutional_value"] = market_inst_value_week.get("total")
+                r["weekly"]["institutional_value_text"] = format_twd_billion_short(market_inst_value_week.get("total"))
+                r["weekly"]["institutional_daily_values"] = [x.get("total", 0) for x in market_inst_value_week.get("daily", [])]
+                r["weekly"]["institutional_week_value"] = market_inst_value_week
             r["stock_note"] = note
             r["data_date"] = data_date
             results.append((name, ticker, r))

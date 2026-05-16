@@ -54,11 +54,11 @@ Email 標題格式：
 
 Google Drive 根資料夾：
 
-https://drive.google.com/drive/u/0/folders/1Zj5nARAz-4D0BrZnUnXdk9K0UQYri3u6
+https://drive.google.com/drive/u/0/folders/1E6w7XNwm3nn7XhjwQwdM62zVQCJgGK6M
 
 上傳路徑：
 
-`每週發布 / 年份 / 台股加權及中大型權值股訊號追蹤`
+直接上傳到上述 Google Drive 根資料夾，不再建立子資料夾。
 
 圖片檔名格式：
 

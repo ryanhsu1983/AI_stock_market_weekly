@@ -1,4 +1,4 @@
-"""
+﻿"""
 每週台股趨勢訊號系統 v1
 ===================
 Repository : github.com/ryanhsu1983/AI_stock_market_weekly
@@ -138,6 +138,26 @@ def _parse_int(value) -> int:
         return 0
 
 
+def _parse_float(value) -> float | None:
+    try:
+        raw = str(value).replace(",", "").replace(" ", "").strip()
+        if raw in ("", "--", "-"):
+            return None
+        return float(raw)
+    except Exception:
+        return None
+
+
+def _parse_float(value) -> float | None:
+    try:
+        raw = str(value).replace(",", "").replace(" ", "").strip()
+        if raw in ("", "--", "-"):
+            return None
+        return float(raw)
+    except Exception:
+        return None
+
+
 def _find_field(fields: list, *keywords: str) -> int | None:
     for idx, field in enumerate(fields):
         if all(keyword in field for keyword in keywords):
@@ -242,7 +262,7 @@ def fetch_weekly_institutional(ticker: str, end_date: datetime | None = None, lo
     base = end_date or datetime.now(TAIPEI_TZ)
     if base.tzinfo is None:
         base = base.replace(tzinfo=TAIPEI_TZ)
-    iso = base.date().isocalendar()
+    week_start, week_end = _week_bounds(base)
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -253,10 +273,11 @@ def fetch_weekly_institutional(ticker: str, end_date: datetime | None = None, lo
     totals = {"foreign_net": 0, "invest_net": 0, "dealer_net": 0, "total_net": 0}
     hit_dates = []
     last_error = ""
+    daily_records = []
 
     for offset in range(lookback_days):
         day = base.date() - timedelta(days=offset)
-        if day.isocalendar()[:2] != iso[:2]:
+        if not (week_start <= day <= week_end):
             continue
         date_str = day.strftime("%Y%m%d")
         url = (
@@ -298,6 +319,13 @@ def fetch_weekly_institutional(ticker: str, end_date: datetime | None = None, lo
             totals["invest_net"] += invest
             totals["dealer_net"] += dealer
             totals["total_net"] += total
+            daily_records.append({
+                "date": date_str,
+                "foreign_net": foreign,
+                "invest_net": invest,
+                "dealer_net": dealer,
+                "total_net": total,
+            })
             hit_dates.append(date_str)
             break
 
@@ -310,6 +338,7 @@ def fetch_weekly_institutional(ticker: str, end_date: datetime | None = None, lo
         date_range=f"{hit_dates[0]}-{hit_dates[-1]}",
         days=len(hit_dates),
         error="",
+        daily=sorted(daily_records, key=lambda x: x["date"]),
         **totals,
     )
 
@@ -356,11 +385,11 @@ def fetch_market_institutional_value_week(end_date: datetime | None = None, look
     base = end_date or datetime.now(TAIPEI_TZ)
     if base.tzinfo is None:
         base = base.replace(tzinfo=TAIPEI_TZ)
-    iso = base.date().isocalendar()
+    week_start, week_end = _week_bounds(base)
     daily = []
     for offset in range(lookback_days):
         day = base.date() - timedelta(days=offset)
-        if day.isocalendar()[:2] != iso[:2]:
+        if not (week_start <= day <= week_end):
             continue
         item = fetch_market_institutional_value_day(day)
         if item:
@@ -381,18 +410,140 @@ def fetch_market_institutional_value_week(end_date: datetime | None = None, look
 
 
 # ── 抓取資料 ────────────────────────────────────────────────
+
+def _parse_twse_date(value: str):
+    parts = str(value).strip().split("/")
+    if len(parts) != 3:
+        return None
+    year = int(parts[0])
+    if year < 1911:
+        year += 1911
+    return datetime(year, int(parts[1]), int(parts[2]))
+
+
+def _month_starts(start_date, end_date) -> list:
+    cur = datetime(start_date.year, start_date.month, 1).date()
+    last = datetime(end_date.year, end_date.month, 1).date()
+    months = []
+    while cur <= last:
+        months.append(cur)
+        if cur.month == 12:
+            cur = cur.replace(year=cur.year + 1, month=1)
+        else:
+            cur = cur.replace(month=cur.month + 1)
+    return months
+
+
+def _twse_headers() -> dict:
+    return {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
+        "Referer": "https://www.twse.com.tw/",
+    }
+
+
+def _fetch_twse_stock_data(stock_id: str, start_date, end_date) -> pd.DataFrame:
+    rows = []
+    for month in _month_starts(start_date, end_date):
+        url = (
+            "https://www.twse.com.tw/exchangeReport/STOCK_DAY"
+            f"?response=json&date={month.strftime('%Y%m%d')}&stockNo={stock_id}"
+        )
+        resp = requests.get(url, headers=_twse_headers(), timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("stat") != "OK":
+            continue
+        fields = data.get("fields", [])
+        idx_date = _find_field(fields, "日期")
+        idx_volume = _find_field(fields, "成交股數")
+        idx_open = _find_field(fields, "開盤價")
+        idx_high = _find_field(fields, "最高價")
+        idx_low = _find_field(fields, "最低價")
+        idx_close = _find_field(fields, "收盤價")
+        if None in (idx_date, idx_open, idx_high, idx_low, idx_close):
+            continue
+        for row in data.get("data", []):
+            dt = _parse_twse_date(row[idx_date])
+            if not dt or not (start_date <= dt.date() <= end_date):
+                continue
+            open_v = _parse_float(row[idx_open])
+            high_v = _parse_float(row[idx_high])
+            low_v = _parse_float(row[idx_low])
+            close_v = _parse_float(row[idx_close])
+            if None in (open_v, high_v, low_v, close_v):
+                continue
+            volume_v = _parse_float(row[idx_volume]) if idx_volume is not None else 0
+            rows.append((dt, open_v, high_v, low_v, close_v, volume_v or 0))
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows, columns=["Date", "Open", "High", "Low", "Close", "Volume"]).drop_duplicates("Date")
+    return df.set_index("Date").sort_index()
+
+
+def _fetch_twse_index_data(start_date, end_date) -> pd.DataFrame:
+    rows = []
+    for month in _month_starts(start_date, end_date):
+        url = (
+            "https://www.twse.com.tw/indicesReport/MI_5MINS_HIST"
+            f"?response=json&date={month.strftime('%Y%m%d')}"
+        )
+        resp = requests.get(url, headers=_twse_headers(), timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("stat") != "OK":
+            continue
+        fields = data.get("fields", [])
+        idx_date = _find_field(fields, "日期")
+        idx_open = _find_field(fields, "開盤")
+        idx_high = _find_field(fields, "最高")
+        idx_low = _find_field(fields, "最低")
+        idx_close = _find_field(fields, "收盤")
+        if None in (idx_date, idx_open, idx_high, idx_low, idx_close):
+            continue
+        for row in data.get("data", []):
+            dt = _parse_twse_date(row[idx_date])
+            if not dt or not (start_date <= dt.date() <= end_date):
+                continue
+            open_v = _parse_float(row[idx_open])
+            high_v = _parse_float(row[idx_high])
+            low_v = _parse_float(row[idx_low])
+            close_v = _parse_float(row[idx_close])
+            if None in (open_v, high_v, low_v, close_v):
+                continue
+            rows.append((dt, open_v, high_v, low_v, close_v, 0))
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows, columns=["Date", "Open", "High", "Low", "Close", "Volume"]).drop_duplicates("Date")
+    return df.set_index("Date").sort_index()
+
 def fetch_data(ticker: str, days: int) -> pd.DataFrame:
-    # yfinance 的 end 是「不含當日」的結束日期；收盤後要抓到今天資料，必須設成台灣明天。
-    end   = datetime.now(TAIPEI_TZ).date() + timedelta(days=1)
+    # 台股價格優先用證交所官方日資料，避免 yfinance 調整價或暫存造成收盤價失真。
+    end = datetime.now(TAIPEI_TZ).date()
     start = end - timedelta(days=days)
+    stock_id = ticker.upper().replace(".TW", "").replace(".TWO", "")
+    try:
+        if ticker == "^TWII":
+            twse_df = _fetch_twse_index_data(start, end)
+        elif stock_id.isdigit() and ticker.upper().endswith(".TW"):
+            twse_df = _fetch_twse_stock_data(stock_id, start, end)
+        else:
+            twse_df = pd.DataFrame()
+        if not twse_df.empty:
+            return twse_df[["Open", "High", "Low", "Close", "Volume"]].dropna(subset=["Open", "High", "Low", "Close"])
+    except Exception as exc:
+        print(f"⚠️  證交所官方價格資料失敗，改用 yfinance 備援：{ticker} {str(exc)[:80]}")
+
+    # yfinance 的 end 是「不含當日」的結束日期；收盤後要抓到今天資料，必須設成台灣明天。
+    yf_end = datetime.now(TAIPEI_TZ).date() + timedelta(days=1)
+    yf_start = yf_end - timedelta(days=days)
     df = yf.download(ticker,
-                     start=start.strftime("%Y-%m-%d"),
-                     end=end.strftime("%Y-%m-%d"),
-                     progress=False, auto_adjust=True)
+                     start=yf_start.strftime("%Y-%m-%d"),
+                     end=yf_end.strftime("%Y-%m-%d"),
+                     progress=False, auto_adjust=False)
     if df.empty:
         raise ValueError(f"無法取得 {ticker} 資料")
     df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
-    return df[["Open","High","Low","Close","Volume"]].dropna()
+    return df[["Open", "High", "Low", "Close", "Volume"]].dropna()
 
 
 def _fetch_close_series(ticker: str, days: int = 180) -> pd.Series:
@@ -417,7 +568,47 @@ def _series_change_pct(series: pd.Series, periods: int) -> float | None:
     return (float(series.iloc[-1]) - prev) / prev * 100
 
 
-def fetch_market_context() -> dict:
+def _date_only(value):
+    if hasattr(value, "date"):
+        return value.date()
+    return pd.Timestamp(value).date()
+
+
+def _week_bounds(reference_date):
+    ref = _date_only(reference_date)
+    monday = ref - timedelta(days=ref.weekday())
+    friday = monday + timedelta(days=4)
+    return monday, friday
+
+
+def _current_week_series(series: pd.Series, reference_date=None, max_points: int = 5) -> list[float]:
+    if series is None or series.empty:
+        return []
+    ref = reference_date or series.index[-1]
+    monday, friday = _week_bounds(ref)
+    picked = []
+    for idx, value in series.dropna().items():
+        day = _date_only(idx)
+        if monday <= day <= friday:
+            picked.append(float(value))
+    if len(picked) >= 2:
+        return picked[-max_points:]
+    return [float(x) for x in series.dropna().tail(max_points)]
+
+
+def _cumulative(values: list[float]) -> list[float]:
+    total = 0.0
+    out = []
+    for value in values or []:
+        try:
+            total += float(value)
+            out.append(total)
+        except Exception:
+            continue
+    return out
+
+
+def fetch_market_context(reference_date=None) -> dict:
     """
     抓取每日會影響台股風險偏好的總體資料。
     USD/TWD 上升代表美元變貴、台幣轉弱；美債殖利率上升代表估值壓力提高。
@@ -432,7 +623,8 @@ def fetch_market_context() -> dict:
             "value": float(fx.iloc[-1]),
             "chg_5d_pct": _series_change_pct(fx, 5),
             "chg_20d_pct": _series_change_pct(fx, 20),
-            "series": [float(x) for x in fx.tail(20)],
+            "series": _current_week_series(fx, reference_date),
+            "source": "Yahoo Finance TWD=X",
         }
     except Exception as exc:
         context["success"] = False
@@ -447,7 +639,8 @@ def fetch_market_context() -> dict:
             "value": current,
             "chg_5d_bp": (current - float(rates.iloc[-6])) * 100 if len(rates) > 5 else None,
             "chg_20d_bp": (current - float(rates.iloc[-21])) * 100 if len(rates) > 20 else None,
-            "series": [float(x) for x in rates.tail(20)],
+            "series": _current_week_series(rates, reference_date),
+            "source": "Yahoo Finance ^TNX",
         }
     except Exception as exc:
         context["success"] = False
@@ -748,6 +941,35 @@ def classify_weekly_posture(regime: dict, b60: dict, week_chg_pct: float | None,
     return "修正等待", WARN_COLOR, "風險條件略占上風；下週先觀察支撐與法人賣壓是否收斂。"
 
 
+def range_position_note(value: float | None) -> str:
+    if value is None:
+        return "資料不足。"
+    if value >= 80:
+        return "越接近100%代表越靠近本週高點；目前收在偏高區，代表週末前買盤承接較強，但追價要留意震盪。"
+    if value >= 60:
+        return "越接近100%代表越靠近本週高點；目前收在中上區，短線仍有支撐。"
+    if value >= 40:
+        return "0%代表本週低點、100%代表本週高點；目前約在區間中段，方向尚未明顯表態。"
+    if value >= 20:
+        return "越接近0%代表越靠近本週低點；目前收在中下區，表示賣壓仍需要觀察。"
+    return "越接近0%代表越靠近本週低點；目前收在偏低區，代表週末前賣壓偏重。"
+
+
+def week_gap_note(weekly: dict) -> str:
+    prev_close = weekly.get("prev_close")
+    week_open = weekly.get("week_start_open")
+    if not prev_close or not week_open:
+        return "本週漲跌以週一開盤到週五收盤計算；相對上週五則是跨週持有者的報酬口徑。"
+    gap_pct = weekly.get("week_open_gap_pct")
+    if gap_pct is None:
+        gap_pct = (week_open - prev_close) / prev_close * 100
+    if abs(gap_pct) < 0.3:
+        return "週一開盤與上週五收盤差距不大，所以本週漲跌與相對上週五通常會接近。"
+    direction = "跳空開高" if gap_pct > 0 else "跳空開低"
+    impact = "拉高跨週持有者報酬，但週內仍可能從高檔拉回" if gap_pct > 0 else "壓低跨週持有者報酬，即使週內反彈也可能仍偏弱"
+    return f"週一相對上週五{direction}{pct_text(gap_pct)}；因此本週漲跌與相對上週五會不同，代表{impact}。"
+
+
 def build_weekly_metrics(df: pd.DataFrame, scfg: dict, inst_week: dict | None,
                          regime: dict, b60: dict, effective_buy: float,
                          effective_sell: float) -> dict:
@@ -755,10 +977,28 @@ def build_weekly_metrics(df: pd.DataFrame, scfg: dict, inst_week: dict | None,
     s, m, l = ma["short"], ma["mid"], ma["long"]
     latest = df.iloc[-1]
     close = float(latest["Close"])
-    week = df.tail(5)
-    prev_close = float(df["Close"].iloc[-6]) if len(df) >= 6 else None
-    week_chg = close - prev_close if prev_close else None
-    week_chg_pct = (week_chg / prev_close * 100) if prev_close else None
+
+    latest_date = _date_only(df.index[-1])
+    week_start_date, planned_week_end = _week_bounds(latest_date)
+    week_mask = [week_start_date <= _date_only(idx) <= planned_week_end for idx in df.index]
+    week = df.loc[week_mask]
+    if week.empty:
+        week = df.tail(5)
+        week_start_date = _date_only(week.index[0])
+        planned_week_end = _date_only(week.index[-1])
+
+    week_end_date = _date_only(week.index[-1])
+    prior = df.loc[[_date_only(idx) < week_start_date for idx in df.index]]
+    prev_close = float(prior["Close"].iloc[-1]) if not prior.empty else None
+    week_start_open = float(week["Open"].iloc[0]) if "Open" in week.columns and pd.notna(week["Open"].iloc[0]) else float(week["Close"].iloc[0])
+    week_start_close = float(week["Close"].iloc[0])
+
+    week_chg = close - week_start_open if week_start_open else None
+    week_chg_pct = (week_chg / week_start_open * 100) if week_start_open else None
+    prev_close_chg = close - prev_close if prev_close else None
+    prev_close_chg_pct = (prev_close_chg / prev_close * 100) if prev_close else None
+    week_open_gap_pct = ((week_start_open - prev_close) / prev_close * 100) if prev_close else None
+
     week_high = float(week["High"].max())
     week_low = float(week["Low"].min())
     week_volume = float(week["Volume"].sum())
@@ -779,11 +1019,41 @@ def build_weekly_metrics(df: pd.DataFrame, scfg: dict, inst_week: dict | None,
         effective_buy, effective_sell
     )
     range_pos = (close - week_low) / (week_high - week_low) * 100 if week_high != week_low else 50.0
-    trend_summary = f"{posture}｜本週{pct_text(week_chg_pct)}，收盤位於本週區間{range_pos:.0f}%"
+    range_note = range_position_note(range_pos)
+    trend_summary = (
+        f"{posture}｜週一開盤至最新收盤{pct_text(week_chg_pct)}，"
+        f"收盤位置{range_pos:.0f}%（0%=本週低點、100%=本週高點）"
+    )
+
     inst_total = inst_week.get("total_net") if inst_week and inst_week.get("success") else None
+    inst_value = inst_total * close if inst_total is not None else None
+    inst_daily_amounts = []
+    if inst_week and inst_week.get("daily"):
+        for day_item in inst_week.get("daily", []):
+            shares = day_item.get("total_net", 0)
+            inst_daily_amounts.append(float(shares) * close)
+
+    weekday_names = ["週一", "週二", "週三", "週四", "週五", "週六", "週日"]
+    week_chart_points = []
+    if not week.empty:
+        first_day = _date_only(week.index[0])
+        week_chart_points.append({
+            "date": f"{weekday_names[first_day.weekday()]}開",
+            "value": week_start_open,
+            "kind": "open",
+        })
+        for idx, row in week.iterrows():
+            day = _date_only(idx)
+            week_chart_points.append({
+                "date": weekday_names[day.weekday()],
+                "value": float(row["Close"]),
+                "kind": "close",
+            })
+
     chart_rows = df.tail(60)
     chart_points = []
     for idx, row in chart_rows.iterrows():
+        day = _date_only(idx)
         chart_points.append({
             "date": idx.strftime("%m/%d") if hasattr(idx, "strftime") else str(idx),
             "close": float(row["Close"]),
@@ -791,9 +1061,19 @@ def build_weekly_metrics(df: pd.DataFrame, scfg: dict, inst_week: dict | None,
             "ma_m": float(row[f"MA{m}"]) if pd.notna(row[f"MA{m}"]) else None,
             "ma_l": float(row[f"MA{l}"]) if pd.notna(row[f"MA{l}"]) else None,
             "volume": float(row["Volume"]),
+            "is_current_week": week_start_date <= day <= planned_week_end,
         })
 
     return {
+        "week_start_date": week_start_date.strftime("%Y-%m-%d"),
+        "week_end_date": week_end_date.strftime("%Y-%m-%d"),
+        "week_range_label": f"{week_start_date.strftime('%m/%d')} - {week_end_date.strftime('%m/%d')}",
+        "week_start_open": week_start_open,
+        "week_start_close": week_start_close,
+        "prev_close": prev_close,
+        "prev_close_chg": prev_close_chg,
+        "prev_close_chg_pct": prev_close_chg_pct,
+        "week_open_gap_pct": week_open_gap_pct,
         "week_chg": week_chg,
         "week_chg_pct": week_chg_pct,
         "week_high": week_high,
@@ -806,14 +1086,16 @@ def build_weekly_metrics(df: pd.DataFrame, scfg: dict, inst_week: dict | None,
         "institutional_total": inst_total,
         "institutional_value": inst_value,
         "institutional_value_text": format_twd_billion_short(inst_value),
-        "institutional_daily_values": inst_daily_shares,
+        "institutional_daily_values": _cumulative(inst_daily_amounts),
         "ma_position": ma_position,
         "posture": posture,
         "posture_color": color,
         "trend_summary": trend_summary,
         "next_focus": next_focus,
         "range_pos": range_pos,
+        "range_position_note": range_note,
         "chart_points": chart_points,
+        "week_chart_points": week_chart_points,
     }
 
 
@@ -1500,7 +1782,7 @@ def evaluate_weighted(df: pd.DataFrame, scfg: dict, inst: dict | None = None,
         "本週變化",
         f"{pct_text(weekly['week_chg_pct'])}｜高{weekly['week_high']:.2f} / 低{weekly['week_low']:.2f}",
         UP_COLOR if (weekly["week_chg_pct"] or 0) >= 0 else DOWN_COLOR,
-        f"本週收盤變化={weekly['week_chg']:+.2f}｜5日漲跌幅={pct_text(weekly['week_chg_pct'])}｜用來看本週價格方向"
+        f"週一開盤={weekly['week_start_open']:.2f}｜最新收盤={close:.2f}｜週一開盤至收盤={pct_text(weekly['week_chg_pct'])}｜相對上週五收盤={pct_text(weekly.get('prev_close_chg_pct'))}"
     )
     add_item(
         "週成交量",
@@ -1804,7 +2086,7 @@ def fetch_auto_news(cfg: dict) -> list:
 
 def market_events_html(cfg: dict, today: str, news_items: list | None = None) -> str:
     events = cfg.get("market_events", [])
-    window_days = int(cfg.get("market_events_window_days", cfg.get("market_events_lookahead_days", 3)))
+    window_days = int(cfg.get("market_events_window_days", cfg.get("market_events_lookahead_days", 14)))
     today_date = datetime.strptime(today, "%Y-%m-%d").date()
     start = today_date - timedelta(days=window_days)
     end = today_date + timedelta(days=window_days)
@@ -1834,8 +2116,8 @@ def market_events_html(cfg: dict, today: str, news_items: list | None = None) ->
         )
 
     if not scheduled_rows:
-        scheduled_rows = (f'<tr><td style="padding:10px 12px;color:#777;font-size:12px;" colspan="4">'
-                f'前後 {window_days} 天內尚未設定重大事件。</td></tr>')
+        scheduled_rows = (f'<tr><td style="padding:10px 12px;color:#777;font-size:12px;line-height:1.6;" colspan="4">'
+                f'固定行事曆篩選邏輯：只顯示報告日前後 {window_days} 天內、且已寫在 config.json 的 market_events 事件；目前沒有符合條件的人工維護事件。</td></tr>')
 
     for item in news_items or []:
         color = impact_colors.get(item.get("impact", ""), "#7f8c8d")
@@ -2063,6 +2345,118 @@ def render_price_chart(result: dict, width: int = 760, height: int = 300, compac
     return svg
 
 
+def render_week_price_chart(result: dict, width: int = 650, height: int = 280) -> str:
+    weekly = result.get("weekly", {})
+    points = weekly.get("week_chart_points", [])
+    clean = []
+    for pt in points:
+        try:
+            clean.append({"date": str(pt.get("date", "")), "value": float(pt.get("value"))})
+        except Exception:
+            continue
+    if len(clean) < 2:
+        return "<div style='color:#7a8178;font-size:13px;'>本週走勢資料不足，暫無線圖。</div>"
+
+    pad_l, pad_r, pad_t, pad_b = 54, 22, 24, 42
+    plot_w = width - pad_l - pad_r
+    plot_h = height - pad_t - pad_b
+    values = [pt["value"] for pt in clean]
+    lo, hi = min(values), max(values)
+    if hi == lo:
+        hi += 1
+        lo -= 1
+    margin = (hi - lo) * 0.12
+    lo -= margin
+    hi += margin
+    span = hi - lo or 1.0
+
+    pts = []
+    for i, pt in enumerate(clean):
+        x = pad_l + plot_w * i / max(len(clean) - 1, 1)
+        y = pad_t + plot_h - ((pt["value"] - lo) / span * plot_h)
+        pts.append((x, y, pt))
+
+    chg = weekly.get("week_chg_pct")
+    line_color = _pct_color(chg)
+    point_nodes = "".join(
+        f"<circle cx='{x:.1f}' cy='{y:.1f}' r='4.2' fill='{line_color}'/><text x='{x:.1f}' y='{height - 16}' text-anchor='middle' fill='#6f776f' font-size='11'>{html_lib.escape(pt['date'])}</text>"
+        for x, y, pt in pts
+    )
+    poly = " ".join(f"{x:.1f},{y:.1f}" for x, y, _ in pts)
+    last_x, last_y, _ = pts[-1]
+    start_text = weekly.get("week_start_date", "")
+    end_text = weekly.get("week_end_date", "")
+    prev_note = ""
+    if weekly.get("prev_close_chg_pct") is not None:
+        prev_note = f"｜相對上週五收盤 {pct_text(weekly.get('prev_close_chg_pct'))}"
+    return f"""
+    <svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="本週週一至週五價格走勢">
+      <rect x="0" y="0" width="{width}" height="{height}" rx="18" fill="#fffdf7"/>
+      <line x1="{pad_l}" y1="{pad_t}" x2="{pad_l}" y2="{pad_t + plot_h}" stroke="#d8d1bd"/>
+      <line x1="{pad_l}" y1="{pad_t + plot_h}" x2="{width - pad_r}" y2="{pad_t + plot_h}" stroke="#d8d1bd"/>
+      <polyline points="{poly}" fill="none" stroke="{line_color}" stroke-width="5.2" stroke-linecap="round" stroke-linejoin="round"/>
+      {point_nodes}
+      <text x="{pad_l}" y="18" fill="#6f776f" font-size="12">高 {max(values):.2f}</text>
+      <text x="{pad_l}" y="{pad_t + plot_h - 6}" fill="#6f776f" font-size="12">低 {min(values):.2f}</text>
+      <rect x="{width - 244}" y="10" width="226" height="38" rx="10" fill="#fffdf7" stroke="#e0d7bd" opacity="0.96"/>
+      <text x="{width - 28}" y="35" text-anchor="end" fill="{line_color}" font-size="20" font-weight="800">{clean[-1]['value']:.2f} / {pct_text(chg)}</text>
+      <text x="{pad_l}" y="{height - 2}" fill="#6f776f" font-size="12">本週定義：週一開盤至週五收盤（{start_text} - {end_text}）{prev_note}</text>
+    </svg>"""
+
+
+def _series_delta(values: list) -> float | None:
+    clean = []
+    for value in values or []:
+        try:
+            clean.append(float(value))
+        except Exception:
+            continue
+    if len(clean) < 2:
+        return None
+    return clean[-1] - clean[0]
+
+
+def macro_metric_note(kind: str, value, series: list | None = None) -> str:
+    delta = _series_delta(series or [])
+    if kind == "institutional":
+        if value is None:
+            return "法人資金資料不足；先以價格、量能與均線判斷市場方向。"
+        if value < 0:
+            return "法人週累計偏賣超，代表大型資金本週降低風險。若同時遇到美中政治、地緣風險或全球股市高檔震盪，權值股追價意願通常下降；若融資餘額也在高檔，拉回時波動容易放大。"
+        if value > 0:
+            return "法人週累計偏買超，代表大型資金仍願意承接台股。若全球股市風險偏好維持、美元壓力不升，權值股較容易延續主流行情；但融資餘額高檔時仍要避免過度追價。"
+        return "法人週累計接近平衡，代表資金沒有明確方向；下週要看是否轉為連續買超或賣超。"
+    if kind == "fx":
+        if delta is None:
+            return "匯率週資料不足；美元/台幣仍是外資風險偏好的重要觀察點。"
+        if delta > 0:
+            return "美元/台幣走升代表台幣轉弱，常見於美元偏強、國際政治或地緣風險升溫時；對外資回流與台股評價通常偏壓抑。"
+        if delta < 0:
+            return "美元/台幣走低代表台幣轉強，通常有利外資評估台股匯兌風險；若搭配法人買超，對權值股較正面。"
+        return "美元/台幣變化有限，匯率暫時不是本週台股主要壓力來源。"
+    if kind == "rates":
+        if delta is None:
+            return "美債殖利率週資料不足；仍需觀察對科技股評價的影響。"
+        if delta > 0:
+            return "美10年債走升代表全球資金折現率壓力升高，對 AI、半導體等高評價族群較不利；若全球股市同時過熱，容易引發評價修正。"
+        if delta < 0:
+            return "美10年債走低代表估值壓力緩和，通常有利科技股與成長股；若地緣風險沒有升高，台股權值股承接會較穩。"
+        return "美10年債變化有限，利率端暫時沒有提供明顯方向。"
+    return ""
+
+
+def sort_weekly_results(results: list, include_market: bool = True) -> list:
+    if not results:
+        return []
+    market = []
+    stocks = results
+    if results[0][1] == "^TWII":
+        market = [results[0]]
+        stocks = results[1:]
+    stocks = sorted(stocks, key=lambda item: item[2].get("weekly", {}).get("week_chg_pct") or 0, reverse=True)
+    return (market if include_market else []) + stocks
+
+
 def weekly_market_overview_html(results: list, macro: dict | None, compact: bool = False) -> str:
     if not results:
         return ""
@@ -2072,13 +2466,18 @@ def weekly_market_overview_html(results: list, macro: dict | None, compact: bool
     rates = macro.get("rates") if macro else None
     chart_w = 920 if compact else 650
     chart_h = 360 if compact else 280
-    chart = render_price_chart(market, chart_w, chart_h, compact=compact)
+    chart = render_week_price_chart(market, chart_w, chart_h)
     fx_metric = f"{fx['value']:.3f}" if fx else "-"
     rates_metric = f"{rates['value']:.2f}%" if rates else "-"
     inst_value_text = weekly.get("institutional_value_text") or format_twd_billion_short(weekly.get("institutional_value"))
     inst_series = weekly.get("institutional_daily_values", [])
     fx_series = fx.get("series", []) if fx else []
     rates_series = rates.get("series", []) if rates else []
+    gap_note = week_gap_note(weekly)
+    range_note = weekly.get("range_position_note") or range_position_note(weekly.get("range_pos"))
+    inst_note = macro_metric_note("institutional", weekly.get("institutional_value"), inst_series)
+    fx_note = macro_metric_note("fx", fx.get("value") if fx else None, fx_series)
+    rates_note = macro_metric_note("rates", rates.get("value") if rates else None, rates_series)
     metric_style = "background:#f8f4e7;border:1px solid #e5dcc0;border-radius:10px;padding:10px 12px;"
     return (
         f'<div style="background:{WEEKLY_PANEL};border:1px solid #e0d7bd;border-radius:14px;padding:18px 20px;margin-bottom:24px;">'
@@ -2094,18 +2493,19 @@ def weekly_market_overview_html(results: list, macro: dict | None, compact: bool
         f'<div style="color:{_pct_color(weekly.get("week_chg_pct"))};font-size:16px;font-weight:800;">{pct_text(weekly.get("week_chg_pct"))}</div>'
         f'</div></div>'
         f'<div style="margin-top:16px;">{chart}</div>'
+        f'<div style="background:#fbf7ea;border-left:4px solid {WEEKLY_GOLD};padding:9px 12px;margin-top:10px;color:#4f5a52;font-size:12px;line-height:1.6;">'
+        f'<b>口徑說明：</b>本週漲跌＝週一開盤到週五收盤；相對上週五＝上週五收盤到週五收盤。{_escape(gap_note)}</div>'
         f'<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px;">'
-        f'<div style="{metric_style}"><div style="font-size:11px;color:#7a8178;">本週高 / 低</div><div style="font-size:15px;font-weight:800;color:{WEEKLY_DARK};">{weekly.get("week_high", 0):.2f} / {weekly.get("week_low", 0):.2f}</div></div>'
-        f'<div style="{metric_style}"><div style="font-size:11px;color:#7a8178;">法人週合計（金額）</div><div style="font-size:15px;font-weight:800;color:{_pct_color(weekly.get("institutional_value"))};">{inst_value_text}</div>{render_sparkline(inst_series, 118, 28)}</div>'
-        f'<div style="{metric_style}"><div style="font-size:11px;color:#7a8178;">美元/台幣</div><div style="font-size:15px;font-weight:800;color:{WEEKLY_DARK};">{fx_metric}</div>{render_sparkline(fx_series, 118, 28)}</div>'
-        f'<div style="{metric_style}"><div style="font-size:11px;color:#7a8178;">美10年債</div><div style="font-size:15px;font-weight:800;color:{WEEKLY_DARK};">{rates_metric}</div>{render_sparkline(rates_series, 118, 28)}</div>'
+        f'<div style="{metric_style}"><div style="font-size:11px;color:#7a8178;">本週高 / 低 / 收盤位置</div><div style="font-size:15px;font-weight:800;color:{WEEKLY_DARK};">{weekly.get("week_high", 0):.2f} / {weekly.get("week_low", 0):.2f} / {weekly.get("range_pos", 0):.0f}%</div><div style="font-size:11px;color:#7a8178;line-height:1.45;margin-top:4px;">{_escape(range_note)}</div></div>'
+        f'<div style="{metric_style}"><div style="font-size:11px;color:#7a8178;">法人週累計（金額）</div><div style="font-size:15px;font-weight:800;color:{_pct_color(weekly.get("institutional_value"))};">{inst_value_text}</div>{render_sparkline(inst_series, 118, 28)}<div style="font-size:11px;color:#7a8178;line-height:1.45;margin-top:4px;">{_escape(inst_note)}</div></div>'
+        f'<div style="{metric_style}"><div style="font-size:11px;color:#7a8178;">美元/台幣</div><div style="font-size:15px;font-weight:800;color:{WEEKLY_DARK};">{fx_metric}</div>{render_sparkline(fx_series, 118, 28)}<div style="font-size:11px;color:#7a8178;line-height:1.45;margin-top:4px;">{_escape(fx_note)}</div></div>'
+        f'<div style="{metric_style}"><div style="font-size:11px;color:#7a8178;">美10年債</div><div style="font-size:15px;font-weight:800;color:{WEEKLY_DARK};">{rates_metric}</div>{render_sparkline(rates_series, 118, 28)}<div style="font-size:11px;color:#7a8178;line-height:1.45;margin-top:4px;">{_escape(rates_note)}</div></div>'
         f'</div></div>'
     )
 
 
 def weekly_stock_scoreboard_html(results: list) -> str:
-    stock_results = results[1:] if results and results[0][1] == "^TWII" else results
-    sorted_results = sorted(stock_results, key=lambda item: item[2].get("weekly", {}).get("week_chg_pct") or 0, reverse=True)
+    sorted_results = sort_weekly_results(results, include_market=False)
     rows = ""
     max_abs = max([abs(item[2].get("weekly", {}).get("week_chg_pct") or 0) for item in sorted_results] + [1])
     for name, ticker, r in sorted_results:
@@ -2125,7 +2525,7 @@ def weekly_stock_scoreboard_html(results: list) -> str:
 
 def weekly_trend_matrix_html(results: list) -> str:
     rows = ""
-    for name, ticker, r in results:
+    for name, ticker, r in sort_weekly_results(results, include_market=True):
         weekly = r.get("weekly", {})
         inst = weekly.get("institutional_value_text") or format_twd_billion_short(weekly.get("institutional_value"))
         vol = weekly.get("volume_ratio")
@@ -2149,6 +2549,46 @@ def weekly_trend_matrix_html(results: list) -> str:
         f'<tbody>{rows}</tbody></table></div>'
     )
 
+def weekly_stock_detail_block(name: str, ticker: str, result: dict) -> str:
+    weekly = result.get("weekly", {})
+    code = ticker.replace(".TW", "").replace(".tw", "")
+    week_pct = weekly.get("week_chg_pct")
+    prev_pct = weekly.get("prev_close_chg_pct")
+    inst_text = weekly.get("institutional_value_text") or format_twd_billion_short(weekly.get("institutional_value"))
+    vol = weekly.get("volume_ratio")
+    vol_text = f"{vol:.2f}x" if vol is not None else "-"
+    vol_note = volume_ratio_note(vol)
+    border = weekly.get("posture_color", result.get("border", WEEKLY_DARK))
+    cards = [
+        ("本週漲跌", pct_text(week_pct), _pct_color(week_pct), f"週一開盤 {weekly.get('week_start_open', 0):.2f} → 收盤 {result.get('close', 0):.2f}"),
+        ("相對上週五", pct_text(prev_pct), _pct_color(prev_pct), week_gap_note(weekly)),
+        ("高低與位置", f"{weekly.get('week_high', 0):.2f} / {weekly.get('week_low', 0):.2f} / {weekly.get('range_pos', 0):.0f}%", WEEKLY_DARK, weekly.get("range_position_note") or range_position_note(weekly.get("range_pos"))),
+        ("法人金額", inst_text, _pct_color(weekly.get("institutional_value")), "大盤為證交所金額；個股為張數乘收盤價估算"),
+        ("量能", vol_text, WEEKLY_DARK, vol_note),
+    ]
+    card_html = "".join(
+        f'<td style="width:20%;padding:8px;vertical-align:top;">'
+        f'<div style="background:#f8f4e7;border:1px solid #e5dcc0;border-radius:10px;padding:10px;min-height:76px;">'
+        f'<div style="font-size:11px;color:#7a8178;margin-bottom:5px;">{html_lib.escape(label)}</div>'
+        f'<div style="font-size:15px;font-weight:800;color:{color};line-height:1.3;">{html_lib.escape(value)}</div>'
+        f'<div style="font-size:11px;color:#7a8178;line-height:1.45;margin-top:4px;">{html_lib.escape(note)}</div>'
+        f'</div></td>'
+        for label, value, color, note in cards
+    )
+    return (
+        f'<div style="background:{WEEKLY_PANEL};border:1px solid #e0d7bd;border-left:5px solid {border};border-radius:12px;padding:14px 16px;margin-bottom:14px;">'
+        f'<div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;">'
+        f'<div><div style="font-size:17px;font-weight:800;color:{WEEKLY_DARK};">{html_lib.escape(name)}</div>'
+        f'<div style="font-size:12px;color:#7a8178;">{html_lib.escape(code)}｜統計區間 {html_lib.escape(weekly.get("week_range_label", ""))}</div></div>'
+        f'<div style="text-align:right;"><div style="font-size:17px;font-weight:800;color:{WEEKLY_DARK};">{result.get("close", 0):.2f}</div>'
+        f'<div style="font-size:12px;font-weight:800;color:{border};">{html_lib.escape(weekly.get("posture", "觀察"))}</div></div></div>'
+        f'<div style="font-size:13px;color:#4f5a52;line-height:1.7;margin:10px 0 12px;">{html_lib.escape(weekly.get("next_focus", ""))}</div>'
+        f'<table style="width:100%;border-collapse:separate;border-spacing:0;"><tr>{card_html}</tr></table>'
+        f'<div style="font-size:12px;color:#4f5a52;line-height:1.6;margin-top:10px;"><b>均線位置：</b>{html_lib.escape(weekly.get("ma_position", "-"))}</div>'
+        f'</div>'
+    )
+
+
 # ── 組裝 HTML Email ──────────────────────────────────────────
 def build_email_html(results: list, today: str, cfg: dict | None = None,
                      macro: dict | None = None, news_items: list | None = None) -> str:
@@ -2156,11 +2596,25 @@ def build_email_html(results: list, today: str, cfg: dict | None = None,
     market_brief = weekly_market_overview_html(results, macro)
     scoreboard = weekly_stock_scoreboard_html(results)
     matrix = weekly_trend_matrix_html(results)
-    events_block = market_events_html(cfg or {}, today, news_items)
+    event_news_items = list(news_items or [])
+    if not event_news_items and results:
+        market_name, _market_ticker, market_result = results[0]
+        market_weekly = market_result.get("weekly", {})
+        event_news_items.append({
+            "date": today,
+            "title": f"{market_name}本週盤勢回顧：{pct_text(market_weekly.get('week_chg_pct'))}",
+            "impact": "中",
+            "scope": "加權指數、權值股、法人資金",
+            "note": f"本週收盤位於高低區間{market_weekly.get('range_pos', 0):.0f}%；法人週累計{market_weekly.get('institutional_value_text', '-')}。若自動新聞來源暫時無資料，先以價格、量能與法人資金作為市場回顧。",
+            "source": "系統盤勢摘要",
+            "link": "",
+        })
+    events_block = market_events_html(cfg or {}, today, event_news_items)
     rules_block = scoring_rules_html()
+    sorted_details = sort_weekly_results(results, include_market=True)
     details = "".join(
-        stock_html_block(n, t, r, note=r.get("stock_note", ""))
-        for n, t, r in results
+        weekly_stock_detail_block(n, t, r)
+        for n, t, r in sorted_details
     )
     return (
         f'<!DOCTYPE html><html><head><meta charset="utf-8"></head>'
@@ -2336,7 +2790,7 @@ def build_social_report_pages(results: list, today: str, cfg: dict | None = None
         <div class='metric'><div class='metric-label'>加權收盤</div><div class='metric-value'>{market.get('close', 0):.2f}</div></div>
         <div class='metric'><div class='metric-label'>本週漲跌</div><div class='metric-value' style='color:{_pct_color(market_weekly.get('week_chg_pct'))}'>{pct_text(market_weekly.get('week_chg_pct'))}</div></div>
         <div class='metric'><div class='metric-label'>週高 / 週低</div><div class='metric-value'>{market_weekly.get('week_high', 0):.0f}/{market_weekly.get('week_low', 0):.0f}</div></div>
-        <div class='metric'><div class='metric-label'>法人週合計（金額）</div><div class='metric-value' style='color:{_pct_color(market_weekly.get('institutional_value'))}'>{inst_value_text}</div>{render_sparkline(market_weekly.get('institutional_daily_values', []), 132, 30)}</div>
+        <div class='metric'><div class='metric-label'>法人週累計（金額）</div><div class='metric-value' style='color:{_pct_color(market_weekly.get('institutional_value'))}'>{inst_value_text}</div>{render_sparkline(market_weekly.get('institutional_daily_values', []), 132, 30)}</div>
         <div class='metric'><div class='metric-label'>美元/台幣</div><div class='metric-value'>{fx_value}</div>{render_sparkline(fx.get('series', []) if fx else [], 132, 30)}</div>
         <div class='metric'><div class='metric-label'>美10年債</div><div class='metric-value'>{rates_value}</div>{render_sparkline(rates.get('series', []) if rates else [], 132, 30)}</div>
       </div>"""
@@ -2697,7 +3151,7 @@ def main():
             if ticker == "^TWII" and market_inst_value_week.get("success"):
                 r["weekly"]["institutional_value"] = market_inst_value_week.get("total")
                 r["weekly"]["institutional_value_text"] = format_twd_billion_short(market_inst_value_week.get("total"))
-                r["weekly"]["institutional_daily_values"] = [x.get("total", 0) for x in market_inst_value_week.get("daily", [])]
+                r["weekly"]["institutional_daily_values"] = _cumulative([x.get("total", 0) for x in market_inst_value_week.get("daily", [])])
                 r["weekly"]["institutional_week_value"] = market_inst_value_week
             r["stock_note"] = note
             r["data_date"] = data_date

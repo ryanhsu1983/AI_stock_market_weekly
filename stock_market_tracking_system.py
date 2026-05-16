@@ -951,7 +951,23 @@ def classify_weekly_posture(regime: dict, b60: dict, week_chg_pct: float | None,
     if week_chg_pct is not None and week_chg_pct < -3 and close >= ma_l:
         return "修正等待", WARN_COLOR, "本週拉回但尚未跌破季線；下週觀察量能是否收斂，以及是否出現止跌K線。"
     if regime.get("key") == "RANGE" or abs(week_chg_pct or 0) < 1.5:
-        return "盤整區間", NEUTRAL_COLOR, "本週變化有限或均線方向不明；下週以區間高低點突破或跌破作為方向確認。"
+        if close >= ma_s and close >= ma_m and effective_buy >= effective_sell:
+            return (
+                "良性盤整",
+                INFO_COLOR,
+                "目前屬於高檔整理而非明顯轉弱；法人與量能若能維持穩定，下週可觀察本週高點能否帶量突破，偏向多方續航整理。"
+            )
+        if close < ma_m or effective_sell >= effective_buy + 10:
+            return (
+                "防守盤整",
+                WARN_COLOR,
+                "目前進入整理但風險條件偏高；若法人續賣、量能放大且跌破本週低點，需提高防守意識，先觀察20日線與本週低點支撐。"
+            )
+        return (
+            "中性盤整",
+            NEUTRAL_COLOR,
+            "目前屬於區間整理階段，市場正在消化宏觀變數與資金流向；下週以本週高低點、法人買賣超與匯率變化作為方向確認。"
+        )
     if effective_buy > effective_sell:
         return "續強觀察", UP_COLOR, "多方條件仍優於風險條件；下週觀察本週高點能否帶量突破。"
     return "修正等待", WARN_COLOR, "風險條件略占上風；下週先觀察支撐與法人賣壓是否收斂。"
